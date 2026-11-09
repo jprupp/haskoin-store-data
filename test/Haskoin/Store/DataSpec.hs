@@ -179,10 +179,12 @@ spec = prepareContext $ \ctx -> do
           .&&. nullBalance (zeroBalance b.address)
 
   describe "Derivation types" $
-    it "are named normal, compat and segwit" $ do
-      map deriveTypeToText [DeriveNormal, DeriveP2SH, DeriveP2WPKH] `shouldBe` ["normal", "compat", "segwit"]
-      map textToDeriveType ["normal", "compat", "segwit", "other"]
-        `shouldBe` [Just DeriveNormal, Just DeriveP2SH, Just DeriveP2WPKH, Nothing]
+    it "are named legacy, compat and segwit, and read normal as legacy" $ do
+      map deriveTypeToText [DeriveNormal, DeriveP2SH, DeriveP2WPKH]
+        `shouldBe` ["legacy", "compat", "segwit"]
+      map textToDeriveType ["legacy", "normal", "compat", "segwit", "other", "Legacy"]
+        `shouldBe` map Just [DeriveNormal, DeriveNormal, DeriveP2SH, DeriveP2WPKH]
+          <> [Nothing, Nothing]
 
   describe "Coin instance of Unspent" $
     it "reads the input kind from the output script" $

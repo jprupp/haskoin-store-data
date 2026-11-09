@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
   `BinfoTxId`, `BinfoFilter` and `BinfoDate` are replaced by the functions
   `textToDeriveType`, `parseBinfoBlockId`, `parseBinfoTxId`,
   `parseBinfoFilter` and `parseBinfoDate`, which give `Maybe` the value.
+- Version 1.9.0: legacy addresses are called `legacy` in the `derive`
+  parameter, and `deriveTypeToText DeriveNormal` is `"legacy"`.
+  `textToDeriveType` still reads `normal`, the old name, so old URLs keep
+  working. Clients never send the default, legacy, so requests stay
+  readable by older servers.
 - haskoin-store-data has its own repository,
   [jprupp/haskoin-store-data](https://github.com/jprupp/haskoin-store-data),
   and its own releases. Up to 1.8.1 it was released from the haskoin-store

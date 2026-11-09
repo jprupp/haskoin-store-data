@@ -182,7 +182,6 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as T
-import Text.Read (readMaybe)
 import Data.Time.Clock.POSIX
   ( posixSecondsToUTCTime,
     utcTimeToPOSIXSeconds,
@@ -196,10 +195,12 @@ import Data.Vector qualified as V
 import Data.Word (Word32, Word64)
 import GHC.Generics (Generic)
 import Haskoin
+import Text.Read (readMaybe)
 
 -- | Type of the addresses derived from an extended public key.
 data DeriveType
-  = -- | legacy pay-to-public-key-hash addresses (@normal@)
+  = -- | legacy pay-to-public-key-hash addresses (@legacy@, formerly
+    -- @normal@)
     DeriveNormal
   | -- | pay-to-witness-public-key-hash nested in pay-to-script-hash
     -- (@compat@)
@@ -208,16 +209,26 @@ data DeriveType
     DeriveP2WPKH
   deriving (Show, Eq, Generic, NFData)
 
--- | Parse a derivation type from @normal@, @compat@ or @segwit@.
+-- | Parse a derivation type from @legacy@, @compat@ or @segwit@.
+--
+-- @normal@ is read as @legacy@ too. It was the only name of legacy addresses
+-- up to version 1.8, and URLs and programs written then keep working; but
+-- "normal" says nothing about the kind of address, and suggests the others
+-- are not, which they have long been, hence the new name.
 textToDeriveType :: Text -> Maybe DeriveType
+textToDeriveType "legacy" = Just DeriveNormal
 textToDeriveType "normal" = Just DeriveNormal
 textToDeriveType "compat" = Just DeriveP2SH
 textToDeriveType "segwit" = Just DeriveP2WPKH
 textToDeriveType _ = Nothing
 
--- | Text form of a derivation type: @normal@, @compat@ or @segwit@.
+-- | Text form of a derivation type: @legacy@, @compat@ or @segwit@.
+--
+-- Clients never send the default type, legacy, in a request (see
+-- @noDefBox@ in "Haskoin.Store.WebCommon"), so servers older than version
+-- 1.9, which do not know the name @legacy@, still understand every request.
 deriveTypeToText :: DeriveType -> Text
-deriveTypeToText DeriveNormal = "normal"
+deriveTypeToText DeriveNormal = "legacy"
 deriveTypeToText DeriveP2SH = "compat"
 deriveTypeToText DeriveP2WPKH = "segwit"
 
@@ -243,7 +254,6 @@ instance Serialize DeriveType where
 
 instance Default DeriveType where
   def = DeriveNormal
-
 
 -- | Extended public key with the type of the addresses to derive from it.
 data XPubSpec = XPubSpec
