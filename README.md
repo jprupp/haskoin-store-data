@@ -20,7 +20,6 @@ database or network node of its own, so it is small to depend on.
 ## Example
 
 ```haskell
-import Control.Monad.Except (runExceptT)
 import Data.Default (def)
 import Haskoin (btc, textToAddr, withContext)
 import Haskoin.Store.WebClient
@@ -29,7 +28,7 @@ main :: IO ()
 main = withContext $ \ctx -> do
   let cfg = def {net = btc} -- https://api.haskoin.com/btc/...
       Just addr = textToAddr btc "bc1q…"
-  r <- runExceptT $ apiCall ctx cfg (GetAddrBalance addr)
+  r <- apiCall ctx cfg (GetAddrBalance addr)
   print r
 ```
 

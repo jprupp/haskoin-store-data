@@ -1,5 +1,5 @@
 name: haskoin-store-data
-version: 1.8.1
+version: 1.9.0
 synopsis: Data types and API client of Haskoin Store
 description: |
   The types of the data that Haskoin Store serves (blocks, transactions,
@@ -62,7 +62,6 @@ dependencies:
   - wreq ^>= 0.5.4.5
   - http-types ^>= 0.12.6
   - lens ^>= 5.3.6
-  - mtl ^>= 2.3.2
   - data-default ^>= 0.8.0.2
   - http-client ^>= 0.7.19
   - vector ^>= 0.13.2.0

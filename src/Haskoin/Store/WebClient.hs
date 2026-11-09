@@ -10,15 +10,14 @@
 --
 -- Build a request value, such as 'GetAddrBalance', and pass it to 'apiCall'.
 -- The response type follows from the request type. Requests and responses use
--- the compact binary encoding of the API. Errors returned by the server are
--- thrown as 'Store.Except' in 'MonadError'.
+-- the compact binary encoding of the API. A call returns the error that the
+-- server answered with, as 'Store.Except', or the response.
 --
 -- @
--- import Control.Monad.Except (runExceptT)
 -- import Data.Default (def)
 --
 -- balance :: Ctx -> Address -> IO (Either Except Balance)
--- balance ctx addr = runExceptT $ 'apiCall' ctx def ('GetAddrBalance' addr)
+-- balance ctx addr = 'apiCall' ctx def ('GetAddrBalance' addr)
 -- @
 --
 -- Requests that take long lists of addresses, transactions or blocks can be
@@ -94,8 +93,6 @@ where
 import Control.Arrow (second)
 import Control.Exception
 import Control.Lens ((.~), (?~), (^.))
-import Control.Monad.Except
-import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Aeson qualified as A
 import Data.Bytes.Get
 import Data.Bytes.Put
@@ -152,40 +149,47 @@ instance Default ApiConfig where
 --
 -- > apiCall ctx def $ GetAddrsUnspent addrs def {limit = Just 10}
 --
--- Only @GET@ and @POST@ endpoints are supported.
+-- Only @GET@ and @POST@ endpoints are supported. The result is the error
+-- that the server answered with, or the response.
 apiCall ::
-  (ApiResource a b, MonadIO m, MonadError Store.Except m) =>
+  (ApiResource a b) =>
   Ctx ->
   ApiConfig ->
   a ->
-  m b
-apiCall ctx (ApiConfig net apiHost) res = do
-  args <- liftEither $ toOptions net ctx res
-  let url = apiHost <> net.name <> cs (queryPath net ctx res)
-  case resourceMethod $ asProxy res of
-    GET -> liftEither =<< liftIO (getBinary args url)
-    POST ->
-      case resourceBody res of
-        Just (PostBox val) ->
-          liftEither =<< liftIO (postBinary args url val)
-        _ -> throwError $ Store.StringError "Could not post resource"
-    _ -> throwError $ Store.StringError "Unsupported HTTP method"
+  IO (Either Store.Except b)
+apiCall ctx (ApiConfig net apiHost) res =
+  case toOptions net ctx res of
+    Left e -> return (Left e)
+    Right args ->
+      let url = apiHost <> net.name <> cs (queryPath net ctx res)
+       in case resourceMethod $ asProxy res of
+            GET -> getBinary args url
+            POST ->
+              case resourceBody res of
+                Just (PostBox val) -> postBinary args url val
+                _ -> return . Left $ Store.StringError "Could not post resource"
+            _ -> return . Left $ Store.StringError "Unsupported HTTP method"
 
 -- | Batch commands that have a large list of arguments:
 --
 -- > apiBatch ctx 20 def (GetAddrsTxs addrs def)
 --
 -- The list is split into chunks of the given size, one call is made per chunk,
--- and the results are concatenated.
+-- and the results are concatenated. The calls stop at the first error.
 apiBatch ::
-  (Batchable a b, MonadIO m, MonadError Store.Except m) =>
+  (Batchable a b) =>
   Ctx ->
   Natural ->
   ApiConfig ->
   a ->
-  m b
-apiBatch ctx i conf res =
-  mconcat <$> mapM (apiCall ctx conf) (resourceBatch i res)
+  IO (Either Store.Except b)
+apiBatch ctx i conf res = go mempty (resourceBatch i res)
+  where
+    go acc [] = return (Right acc)
+    go acc (r : rs) =
+      apiCall ctx conf r >>= \case
+        Left e -> return (Left e)
+        Right b -> go (acc <> b) rs
 
 -- | Requests that can be split into several smaller ones whose results are
 -- concatenated.

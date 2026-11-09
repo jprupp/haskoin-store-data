@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Breaking, version 1.9.0: `apiCall` and `apiBatch` run in plain `IO` and
+  return `Either Except` the response, instead of working in any monad with
+  `MonadIO` and `MonadError Except`. Where you wrote
+  `runExceptT (apiCall ctx cfg req)`, write `apiCall ctx cfg req`; in an
+  `ExceptT` of your own, wrap it with `ExceptT`. `apiBatch` stops at the
+  first error. The package no longer depends on mtl.
 - haskoin-store-data has its own repository,
   [jprupp/haskoin-store-data](https://github.com/jprupp/haskoin-store-data),
   and its own releases. Up to 1.8.1 it was released from the haskoin-store
