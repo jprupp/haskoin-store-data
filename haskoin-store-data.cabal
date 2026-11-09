@@ -13,8 +13,8 @@ description:    The types of the data that Haskoin Store serves (blocks, transac
                 encodings, and a client for its REST API. Use it to talk to a Haskoin Store
                 server from Haskell.
 category:       Bitcoin, Finance, Network
-homepage:       https://github.com/jprupp/haskoin-store#readme
-bug-reports:    https://github.com/jprupp/haskoin-store/issues
+homepage:       https://github.com/jprupp/haskoin-store-data#readme
+bug-reports:    https://github.com/jprupp/haskoin-store-data/issues
 author:         JP Rupp
 maintainer:     jprupp@protonmail.ch
 copyright:      (c) Haskoin Developers
@@ -29,8 +29,7 @@ extra-doc-files:
 
 source-repository head
   type: git
-  location: https://github.com/jprupp/haskoin-store
-  subdir: haskoin-store-data
+  location: https://github.com/jprupp/haskoin-store-data
 
 library
   exposed-modules:

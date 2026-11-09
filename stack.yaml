@@ -1,0 +1,15 @@
+resolver: nightly-2026-11-07
+ghc-options:
+  "$everything": -O2
+nix:
+  packages:
+  - secp256k1
+  - zlib
+  - pkg-config
+  - cacert
+packages:
+  - .
+extra-deps:
+  - base16-2.0
+  - secp256k1-haskell-2.0.1
+  - haskoin-core-1.6.1

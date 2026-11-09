@@ -13,9 +13,9 @@ maintainer: jprupp@protonmail.ch
 copyright: (c) Haskoin Developers
 license: MIT
 license-file: LICENSE
-github: jprupp/haskoin-store/haskoin-store-data
-homepage: https://github.com/jprupp/haskoin-store#readme
-bug-reports: https://github.com/jprupp/haskoin-store/issues
+github: jprupp/haskoin-store-data
+homepage: https://github.com/jprupp/haskoin-store-data#readme
+bug-reports: https://github.com/jprupp/haskoin-store-data/issues
 tested-with: GHC == 9.12.4
 extra-doc-files:
   - README.md
