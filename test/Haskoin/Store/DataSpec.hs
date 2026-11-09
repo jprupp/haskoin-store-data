@@ -13,6 +13,7 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.IntMap qualified as IntMap
 import Data.Maybe (fromJust)
 import Data.Text (Text)
+import Data.Text.Encoding (encodeUtf8)
 import Haskoin
 import Haskoin.Store.Data
 import Haskoin.Store.Gen
@@ -20,11 +21,6 @@ import Haskoin.Store.Laws
 import Haskoin.Util.Arbitrary
 import Test.Hspec
 import Test.QuickCheck
-
--- | Networks with different address formats: legacy and Bech32 on Bitcoin,
--- CashAddr on Bitcoin Cash, and the prefixes of their test networks.
-nets :: [Network]
-nets = allNets
 
 spec :: Spec
 spec = prepareContext $ \ctx -> do
@@ -43,16 +39,17 @@ spec = prepareContext $ \ctx -> do
     binaryLaws (arbitrary :: Gen (GenericResult BlockData))
     binaryLaws (arbitrary :: Gen (RawResult BlockData))
     binaryLaws (arbitrary :: Gen (RawResultList BlockData))
-    forM_ nets $ \net -> describe net.name $ do
-      binaryLaws (arbitraryDeriveType net)
-      binaryLaws (arbitraryXPubSpec net ctx)
-      binaryLaws (arbitraryBalance net)
-      binaryLaws (arbitraryUnspent net)
-      binaryLaws (arbitraryStoreInput net)
-      binaryLaws (arbitraryStoreOutput net)
-      binaryLaws (arbitraryTransaction net)
-      binaryLaws (arbitraryXPubBal net)
-      binaryLaws (arbitraryXPubUnspent net)
+    -- also covered inside the types below, but each has its own cereal and
+    -- binary instances
+    binaryLaws (anyNet arbitraryBalance)
+    binaryLaws (anyNet arbitraryUnspent)
+    binaryLaws (anyNet arbitraryStoreInput)
+    binaryLaws (anyNet arbitraryStoreOutput)
+    binaryLaws (anyNet arbitraryDeriveType)
+    binaryLaws (anyNet (`arbitraryXPubSpec` ctx))
+    binaryLaws (anyNet arbitraryXPubBal)
+    binaryLaws (anyNet arbitraryXPubUnspent)
+    binaryLaws (anyNet arbitraryTransaction)
 
   describe "JSON" $ do
     jsonLaws (arbitrary :: Gen TxRef)
@@ -80,26 +77,22 @@ spec = prepareContext $ \ctx -> do
     jsonLaws (arbitrary :: Gen BinfoHeader)
     jsonLaws (arbitrary :: Gen BinfoBlockInfos)
 
-  describe "JSON of a network" $ forM_ nets $ \net -> describe net.name $ do
-    marshalLaws net (arbitraryBalance net)
-    marshalLaws net (arbitraryStoreOutput net)
-    marshalLaws net (arbitraryUnspent net)
-    marshalLaws net (arbitraryXPubBal net)
-    marshalLaws net (arbitraryXPubUnspent net)
-    marshalLaws net (arbitraryStoreInput net)
-    marshalLaws net (arbitraryBlockData net)
-    marshalLaws net (arbitraryTransaction net)
-    marshalLaws (net, ctx) (arbitraryBinfoMultiAddr net ctx)
-    marshalLaws (net, ctx) (arbitraryBinfoBalance net ctx)
-    marshalLaws (net, ctx) (arbitraryBinfoBlock net ctx)
-    marshalLaws (net, ctx) (arbitraryBinfoTx net ctx)
-    marshalLaws (net, ctx) (arbitraryBinfoTxInput net ctx)
-    marshalLaws (net, ctx) (arbitraryBinfoTxOutput net ctx)
-    marshalLaws (net, ctx) (arbitraryBinfoXPubPath net ctx)
-    marshalLaws (net, ctx) (arbitraryBinfoUnspent net ctx)
-    marshalLaws (net, ctx) (small (arbitraryBinfoBlock net ctx))
-    marshalLaws (net, ctx) (arbitraryBinfoRawAddr net ctx)
-    marshalLaws (net, ctx) (arbitraryBinfoMempool net ctx)
+  -- Balance, Unspent, StoreInput, StoreOutput and the inputs and outputs of
+  -- BinfoTx are encoded through their own instances inside these.
+  describe "JSON of a network" $ do
+    let withCtx = (,ctx)
+    marshalLaws id arbitraryXPubBal
+    marshalLaws id arbitraryXPubUnspent
+    marshalLaws id arbitraryBlockData
+    marshalLaws id arbitraryTransaction
+    marshalLaws withCtx (`arbitraryBinfoMultiAddr` ctx)
+    marshalLaws withCtx (`arbitraryBinfoBalance` ctx)
+    marshalLaws withCtx (`arbitraryBinfoBlock` ctx)
+    marshalLaws withCtx (`arbitraryBinfoTx` ctx)
+    marshalLaws withCtx (`arbitraryBinfoXPubPath` ctx)
+    marshalLaws withCtx (`arbitraryBinfoUnspent` ctx)
+    marshalLaws withCtx (`arbitraryBinfoRawAddr` ctx)
+    marshalLaws withCtx (`arbitraryBinfoMempool` ctx)
 
   -- Other programs read these formats: they must not change by accident.
   describe "Wire format" $ do
@@ -158,13 +151,12 @@ spec = prepareContext $ \ctx -> do
                   bs -> expectationFailure ("not the balance of one xpub: " <> show bs)
           _ -> discard
 
-  describe "Balances" $ do
+  describe "Balances" $
     it "are null only when nothing ever touched the address" $
       forAll (arbitraryBalance btc) $ \b ->
         nullBalance b
           === (b.confirmed == 0 && b.unconfirmed == 0 && b.utxo == 0 && b.txs == 0 && b.received == 0)
-    it "start null" $
-      forAll (arbitraryAddress btc) (nullBalance . zeroBalance)
+          .&&. nullBalance (zeroBalance b.address)
 
   describe "Derivation types" $
     it "are named normal, compat and segwit" $ do
@@ -222,27 +214,23 @@ spec = prepareContext $ \ctx -> do
                            fromIntegral (len witless * 3 + len td.tx),
                            ws
                          )
-    it "gives a SegWit output its address on Bitcoin" $
-      outputJson btc p2wpkh
-        `shouldBe` [ json
-                       "{\"address\":\"bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4\",\
-                       \\"pkscript\":\"0014751e76e8199196d454941c45d1b3a323f1433bd6\",\
-                       \\"value\":1000,\"spent\":false,\"spender\":null}"
-                   ]
-    it "gives a SegWit-shaped output no address on Bitcoin Cash, which has no SegWit" $
-      outputJson bch p2wpkh
-        `shouldBe` [ json
-                       "{\"address\":null,\
-                       \\"pkscript\":\"0014751e76e8199196d454941c45d1b3a323f1433bd6\",\
-                       \\"value\":1000,\"spent\":false,\"spender\":null}"
-                   ]
-    it "gives a 256-bit hash lock output no address on Bitcoin, which has no such address" $
-      outputJson btc hashLock
-        `shouldBe` [ json
-                       "{\"address\":null,\
-                       \\"pkscript\":\"aa20bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb87\",\
-                       \\"value\":1000,\"spent\":false,\"spender\":null}"
-                   ]
+    -- an output has an address only where the network has that kind
+    forM_
+      [ ("a SegWit output an address on Bitcoin", btc, p2wpkh, "\"bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4\""),
+        ("a SegWit-shaped output no address on Bitcoin Cash", bch, p2wpkh, "null"),
+        ("a 256-bit hash lock no address on Bitcoin", btc, hashLock, "null")
+      ]
+      $ \(what, net, script, addr) ->
+        it ("gives " <> what) $
+          outputJson net script
+            `shouldBe` [ json
+                           ( "{\"address\":"
+                               <> addr
+                               <> ",\"pkscript\":\""
+                               <> BL.fromStrict (encodeUtf8 script)
+                               <> "\",\"value\":1000,\"spent\":false,\"spender\":null}"
+                           )
+                       ]
   where
     z = sha256 B.empty
     expectedKind = \case

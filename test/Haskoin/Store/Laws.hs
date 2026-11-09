@@ -2,8 +2,13 @@
 -- Laws that every encoding of the data of the store must obey, as specs that
 -- take a generator. One line per type in a test table, instead of a block of
 -- near-identical code per type and encoding.
+--
+-- Types whose encoding depends on the network get a random network for each
+-- case ('anyNet'), so that every network is covered without running each law
+-- once per network: the networks differ only in their address prefixes.
 module Haskoin.Store.Laws
-  ( binaryLaws,
+  ( anyNet,
+    binaryLaws,
     jsonLaws,
     marshalLaws,
   )
@@ -23,10 +28,11 @@ import Data.Proxy (Proxy (..))
 import Data.Serialize (Serialize)
 import Data.Serialize qualified as Cereal
 import Data.Typeable (Typeable, typeRep)
+import Haskoin (Network (..), allNets)
 import Haskoin.Util (MarshalJSON (..))
 import Test.Hspec (Spec)
 import Test.Hspec.QuickCheck (prop)
-import Test.QuickCheck (Gen, forAll, (.&&.), (===))
+import Test.QuickCheck (Gen, counterexample, elements, forAll, (.&&.), (===))
 
 -- | Name of the type of a generator, for the description of a test.
 name :: forall a. (Typeable a) => Gen a -> String
@@ -50,9 +56,21 @@ jsonLaws g = prop (name g) . forAll g $ \x ->
   A.fromJSON (A.toJSON x) === A.Success x
     .&&. (A.decode (A.encode x) :: Maybe Value) === Just (A.toJSON x)
 
--- | Like 'jsonLaws', for JSON that depends on the network.
-marshalLaws :: forall s a. (Eq a, Show a, Typeable a, MarshalJSON s a) => s -> Gen a -> Spec
-marshalLaws s g = prop (name g) . forAll g $ \x ->
-  parseMaybe (unmarshalValue s) (marshalValue s x) === Just x
-    .&&. (A.decode (encodingToLazyByteString (marshalEncoding s x)) :: Maybe Value)
-      === Just (marshalValue s x)
+-- | A value of a random network.
+anyNet :: (Network -> Gen a) -> Gen a
+anyNet g = elements allNets >>= g
+
+-- | Like 'jsonLaws', for JSON that depends on the network, which is random
+-- for each case; @s@ is what the encoding takes, made from the network.
+marshalLaws ::
+  forall s a.
+  (Eq a, Show a, Typeable a, MarshalJSON s a) =>
+  (Network -> s) ->
+  (Network -> Gen a) ->
+  Spec
+marshalLaws mk g = prop (name (g undefined)) . forAll (elements allNets) $ \net ->
+  let s = mk net
+   in counterexample net.name . forAll (g net) $ \x ->
+        parseMaybe (unmarshalValue s) (marshalValue s x) === Just x
+          .&&. (A.decode (encodingToLazyByteString (marshalEncoding s x)) :: Maybe Value)
+            === Just (marshalValue s x)

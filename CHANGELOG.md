@@ -26,7 +26,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - Tests checked by law for every type: binary encodings round-trip and agree
   between Serial, cereal and binary; JSON round-trips and the fast encoders
   write the same JSON as `toJSON`; the wire format of the basic types is
-  pinned. The suite runs in about 25 seconds instead of nearly four minutes.
+  pinned. Types whose encoding depends on the network get a random network
+  for each case, so every network is covered without running each law once
+  per network. The suite runs in about 4 seconds instead of nearly four
+  minutes.
 
 ## [1.8.1] - 2026-11-07
 
