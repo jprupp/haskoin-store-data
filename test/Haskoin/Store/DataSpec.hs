@@ -119,6 +119,26 @@ spec = prepareContext $ \ctx -> do
           \\"indices\":{\"change\":5,\"external\":6}}"
 
   describe "Blockchain.info helpers" $ do
+    it "reads its request parameters" $ do
+      let h = TxHash (sha256 B.empty)
+          b = BlockHash (sha256 B.empty)
+      parseBinfoTxId (txHashToHex h) `shouldBe` Just (BinfoTxIdHash h)
+      parseBinfoTxId "8011147086339971" `shouldBe` Just (BinfoTxIdIndex 8011147086339971)
+      parseBinfoTxId "nonsense" `shouldBe` Nothing
+      parseBinfoBlockId (blockHashToHex b) `shouldBe` Just (BinfoBlockHash b)
+      parseBinfoBlockId "100" `shouldBe` Just (BinfoBlockIndex 100)
+      map parseBinfoFilter ["0", "1", "2", "3", "4", "5", "6", "7"]
+        `shouldBe` [ Just BinfoFilterAll,
+                     Just BinfoFilterSent,
+                     Just BinfoFilterReceived,
+                     Just BinfoFilterMoved,
+                     Nothing,
+                     Just BinfoFilterConfirmed,
+                     Just BinfoFilterAll,
+                     Just BinfoFilterMempool
+                   ]
+      map parseBinfoDate ["09-11-2026", "09/11/2026", "2026-11-09"]
+        `shouldBe` [Just (BinfoDate 1794182400), Just (BinfoDate 1794182400), Nothing]
     it "numbers a transaction by the first bits of its hash" $ do
       let h = TxHash (sha256 B.empty)
       encodeBinfoTxId False h `shouldBe` BinfoTxIdHash h

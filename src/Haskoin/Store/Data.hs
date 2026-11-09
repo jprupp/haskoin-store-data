@@ -91,9 +91,12 @@ module Haskoin.Store.Data
     -- * Blockchain.info API
     BinfoInfo (..),
     BinfoBlockId (..),
+    parseBinfoBlockId,
     BinfoTxId (..),
+    parseBinfoTxId,
     encodeBinfoTxId,
     BinfoFilter (..),
+    parseBinfoFilter,
     BinfoMultiAddr (..),
     BinfoShortBal (..),
     BinfoBalance (..),
@@ -123,6 +126,7 @@ module Haskoin.Store.Data
     BinfoHistory (..),
     toBinfoHistory,
     BinfoDate (..),
+    parseBinfoDate,
     BinfoHeader (..),
     BinfoMempool (..),
     BinfoBlockInfos (..),
@@ -178,7 +182,7 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as T
-import Data.Text.Lazy qualified as LazyText
+import Text.Read (readMaybe)
 import Data.Time.Clock.POSIX
   ( posixSecondsToUTCTime,
     utcTimeToPOSIXSeconds,
@@ -192,7 +196,6 @@ import Data.Vector qualified as V
 import Data.Word (Word32, Word64)
 import GHC.Generics (Generic)
 import Haskoin
-import Web.Scotty.Trans (Parsable (..))
 
 -- | Type of the addresses derived from an extended public key.
 data DeriveType
@@ -241,11 +244,6 @@ instance Serialize DeriveType where
 instance Default DeriveType where
   def = DeriveNormal
 
-instance Parsable DeriveType where
-  parseParam txt =
-    case textToDeriveType (LazyText.toStrict txt) of
-      Nothing -> Left "invalid derivation type"
-      Just x -> Right x
 
 -- | Extended public key with the type of the addresses to derive from it.
 data XPubSpec = XPubSpec
@@ -2218,14 +2216,12 @@ data BinfoBlockId
     BinfoBlockIndex !Word32
   deriving (Eq, Show, Read, Generic, NFData)
 
-instance Parsable BinfoBlockId where
-  parseParam t =
-    hex <> igr
-    where
-      hex = case hexToBlockHash (LazyText.toStrict t) of
-        Nothing -> Left "could not decode txid"
-        Just h -> Right $ BinfoBlockHash h
-      igr = BinfoBlockIndex <$> parseParam t
+-- | Read a block identifier from the text of a request parameter: a block
+-- hash in hex, or a height.
+parseBinfoBlockId :: Text -> Maybe BinfoBlockId
+parseBinfoBlockId t =
+  (BinfoBlockHash <$> hexToBlockHash t)
+    <|> (BinfoBlockIndex <$> readMaybe (cs t))
 
 -- | Transaction identified by hash or by short number; see 'toIntTxId'.
 data BinfoTxId
@@ -2240,15 +2236,12 @@ encodeBinfoTxId :: Bool -> TxHash -> BinfoTxId
 encodeBinfoTxId False = BinfoTxIdHash
 encodeBinfoTxId True = BinfoTxIdIndex . toIntTxId
 
-instance Parsable BinfoTxId where
-  parseParam t =
-    hex <> igr
-    where
-      hex =
-        case hexToTxHash (LazyText.toStrict t) of
-          Nothing -> Left "could not decode txid"
-          Just h -> Right $ BinfoTxIdHash h
-      igr = BinfoTxIdIndex <$> parseParam t
+-- | Read a transaction identifier from the text of a request parameter: a
+-- transaction hash in hex, or a short number.
+parseBinfoTxId :: Text -> Maybe BinfoTxId
+parseBinfoTxId t =
+  (BinfoTxIdHash <$> hexToTxHash t)
+    <|> (BinfoTxIdIndex <$> readMaybe (cs t))
 
 instance ToJSON BinfoTxId where
   toJSON (BinfoTxIdHash h) = toJSON h
@@ -2277,17 +2270,19 @@ data BinfoFilter
     BinfoFilterMempool
   deriving (Eq, Show, Generic, NFData)
 
-instance Parsable BinfoFilter where
-  parseParam t =
-    parseParam t >>= \case
-      (0 :: Int) -> return BinfoFilterAll
-      1 -> return BinfoFilterSent
-      2 -> return BinfoFilterReceived
-      3 -> return BinfoFilterMoved
-      5 -> return BinfoFilterConfirmed
-      6 -> return BinfoFilterAll
-      7 -> return BinfoFilterMempool
-      _ -> Left "could not parse filter parameter"
+-- | Read a filter from the text of a request parameter: the number that
+-- Blockchain.info uses for it.
+parseBinfoFilter :: Text -> Maybe BinfoFilter
+parseBinfoFilter t =
+  readMaybe (cs t) >>= \case
+    (0 :: Int) -> Just BinfoFilterAll
+    1 -> Just BinfoFilterSent
+    2 -> Just BinfoFilterReceived
+    3 -> Just BinfoFilterMoved
+    5 -> Just BinfoFilterConfirmed
+    6 -> Just BinfoFilterAll
+    7 -> Just BinfoFilterMempool
+    _ -> Nothing
 
 -- | Response of @\/blockchain\/multiaddr@.
 data BinfoMultiAddr = BinfoMultiAddr
@@ -3379,14 +3374,13 @@ newtype BinfoDate = BinfoDate Word64
   deriving stock (Eq, Show, Read, Generic)
   deriving anyclass (NFData)
 
-instance Parsable BinfoDate where
-  parseParam t =
-    maybeToEither "Cannot parse date"
-      . fmap (BinfoDate . round . utcTimeToPOSIXSeconds)
-      $ p "%d-%m-%Y" <|> p "%d/%m/%Y"
-    where
-      s = LazyText.unpack t
-      p fmt = parseTimeM False defaultTimeLocale fmt s
+-- | Read a date from the text of a request parameter, as @dd-mm-yyyy@ or
+-- @dd\/mm\/yyyy@.
+parseBinfoDate :: Text -> Maybe BinfoDate
+parseBinfoDate t =
+  BinfoDate . round . utcTimeToPOSIXSeconds <$> (p "%d-%m-%Y" <|> p "%d/%m/%Y")
+  where
+    p fmt = parseTimeM False defaultTimeLocale fmt (cs t)
 
 -- | Price of the coin of the network in a fiat currency, from the ticker
 -- service.

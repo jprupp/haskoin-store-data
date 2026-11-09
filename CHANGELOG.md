@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
   `runExceptT (apiCall ctx cfg req)`, write `apiCall ctx cfg req`; in an
   `ExceptT` of your own, wrap it with `ExceptT`. `apiBatch` stops at the
   first error. The package no longer depends on mtl.
+- Breaking, version 1.9.0: no dependency on Scotty. `capturePath` gives the
+  route pattern as `Text`, such as `/block/:block`, instead of a Scotty
+  `RoutePattern`. The `Parsable` instances of `DeriveType`, `BinfoBlockId`,
+  `BinfoTxId`, `BinfoFilter` and `BinfoDate` are replaced by the functions
+  `textToDeriveType`, `parseBinfoBlockId`, `parseBinfoTxId`,
+  `parseBinfoFilter` and `parseBinfoDate`, which give `Maybe` the value.
 - haskoin-store-data has its own repository,
   [jprupp/haskoin-store-data](https://github.com/jprupp/haskoin-store-data),
   and its own releases. Up to 1.8.1 it was released from the haskoin-store

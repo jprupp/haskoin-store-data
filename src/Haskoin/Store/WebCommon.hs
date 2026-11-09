@@ -93,7 +93,6 @@ import Control.Monad (guard)
 import Data.Bytes.Serial
 import Data.Default (Default, def)
 import Data.Proxy (Proxy (..))
-import Data.String (IsString (..))
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -112,7 +111,6 @@ import Haskoin.Transaction
 import Network.HTTP.Types (StdMethod (..))
 import Numeric.Natural (Natural)
 import Text.Read (readMaybe)
-import Web.Scotty.Trans qualified as Scotty
 
 -------------------
 -- API Resources --
@@ -543,10 +541,12 @@ queryPath net ctx a = f $ encParam <$> fst (queryParams a)
         Just [res] -> res
         _ -> error "Invalid query param"
 
--- | Route pattern of an endpoint for the server, with a named capture for each path parameter.
-capturePath :: (ApiResource a b) => Proxy a -> Scotty.RoutePattern
+-- | Route pattern of an endpoint for the server, such as
+-- @\/block\/:block@: its path, with a capture named after each path
+-- parameter, preceded by a colon.
+capturePath :: (ApiResource a b) => Proxy a -> Text
 capturePath proxy =
-  fromString $ cs $ f $ toLabel <$> captureParams proxy
+  f $ toLabel <$> captureParams proxy
   where
     f = resourcePath proxy
     toLabel (ProxyBox p) = ":" <> proxyLabel p
