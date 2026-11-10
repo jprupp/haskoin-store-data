@@ -166,6 +166,7 @@ instance Arbitrary HealthCheck where
       <*> arbitrary
       <*> arbitrary
       <*> arbitrary
+      <*> arbitrary
 
 instance Arbitrary RejectCode where
   arbitrary =

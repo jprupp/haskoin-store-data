@@ -1830,6 +1830,18 @@ instance FromJSON MaxHealth where
 
 -- | Health of the store, as returned by @\/health@. It is healthy if every check
 -- passes.
+--
+-- The check of Redis is not one of them. A store that has a Redis cache and
+-- cannot reach it still answers every request, from its own database, so it
+-- is fit to serve, and 'isOK' says so. What it lost is that its answers are
+-- the ones that the stores sharing that Redis give together. That is worth
+-- knowing and not worth taking the store out of service for, so it has a
+-- field of its own, and @\/health@ answers 203 instead of 200.
+--
+-- The field is the last thing in the binary encoding, and may be missing
+-- there and in JSON, where it reads as 'Nothing'. So the output of a store
+-- from before the field can still be read, and a client from before it
+-- reads the output of a new store.
 data HealthCheck = HealthCheck
   { -- | the database keeps up with the headers
     blocks :: !BlockHealth,
@@ -1846,7 +1858,10 @@ data HealthCheck = HealthCheck
     -- | version of the software
     version :: !String,
     -- | time of the check
-    time :: !Word64
+    time :: !Word64,
+    -- | whether the Redis cache answers; 'Nothing' for a store that has
+    -- none
+    redis :: !(Maybe Bool)
   }
   deriving (Show, Eq, Generic, NFData)
 
@@ -1861,6 +1876,10 @@ instance Serial HealthCheck where
     putLengthBytes $ T.encodeUtf8 $ T.pack h.network
     putLengthBytes $ T.encodeUtf8 $ T.pack h.version
     putWord64be h.time
+    putWord8 $ case h.redis of
+      Nothing -> 0x00
+      Just False -> 0x01
+      Just True -> 0x02
   deserialize = do
     k <- deserialize
     blocks <- deserialize
@@ -1871,6 +1890,15 @@ instance Serial HealthCheck where
     network <- T.unpack . T.decodeUtf8 <$> getLengthBytes
     version <- T.unpack . T.decodeUtf8 <$> getLengthBytes
     time <- getWord64be
+    redis <-
+      isEmpty >>= \case
+        True -> return Nothing
+        False ->
+          getWord8 >>= \case
+            0x00 -> return Nothing
+            0x01 -> return (Just False)
+            0x02 -> return (Just True)
+            _ -> fail "Cannot decode the health of Redis"
     let h = HealthCheck {..}
     unless (k == isOK h) $ fail "Inconsistent health check"
     return h
@@ -1895,7 +1923,7 @@ instance Healthy HealthCheck where
 
 instance ToJSON HealthCheck where
   toJSON h =
-    A.object
+    A.object $
       [ "blocks" .= h.blocks,
         "last-block" .= h.lastBlock,
         "last-tx" .= h.lastTx,
@@ -1906,6 +1934,7 @@ instance ToJSON HealthCheck where
         "time" .= show (posixSecondsToUTCTime $ fromIntegral h.time),
         "ok" .= isOK h
       ]
+        <> ["redis" .= A.object ["ok" .= up] | Just up <- [h.redis]]
 
 instance FromJSON HealthCheck where
   parseJSON =
@@ -1919,6 +1948,7 @@ instance FromJSON HealthCheck where
       version <- o .: "version"
       utcTime <- read <$> o .: "time"
       let time = round $ utcTimeToPOSIXSeconds utcTime
+      redis <- o .:? "redis" >>= mapM (.: "ok")
       return HealthCheck {..}
 
 -- | Event streamed by @\/events@.

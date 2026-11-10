@@ -5,6 +5,7 @@ module Haskoin.Store.DataSpec (spec) where
 import Control.Monad (forM_)
 import Data.Aeson (Value)
 import Data.Aeson qualified as A
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as B
 import Data.ByteString.Lazy qualified as BL
 import Data.Bytes.Put (runPutS)
@@ -12,6 +13,7 @@ import Data.Bytes.Serial (Serial, serialize)
 import Data.HashMap.Strict qualified as HashMap
 import Data.IntMap qualified as IntMap
 import Data.Maybe (fromJust)
+import Data.Serialize qualified as S
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import Haskoin
@@ -93,6 +95,36 @@ spec = prepareContext $ \ctx -> do
     marshalLaws withCtx (`arbitraryBinfoUnspent` ctx)
     marshalLaws withCtx (`arbitraryBinfoRawAddr` ctx)
     marshalLaws withCtx (`arbitraryBinfoMempool` ctx)
+
+  describe "Health check" $ do
+    let bare =
+          HealthCheck
+            { blocks = BlockHealth 10 10 2,
+              lastBlock = TimeHealth 5 100,
+              lastTx = TimeHealth 5 100,
+              pendingTxs = MaxHealth 0 100,
+              peers = CountHealth 3 1,
+              network = "btc",
+              version = "1.9.0",
+              time = 1700000000,
+              redis = Nothing
+            }
+        without key = \case
+          A.Object o -> A.Object (KeyMap.delete key o)
+          v -> v
+    it "reads what a store wrote before there was a check of Redis" $ do
+      -- the check of Redis is the last byte, and its key in JSON
+      let old = B.init (runPutS (serialize bare {redis = Just True}))
+      S.decode old `shouldBe` Right bare
+      A.fromJSON (without "redis" (A.toJSON bare {redis = Just False})) `shouldBe` A.Success bare
+    it "is fit to serve without its Redis, and says that it is without" $ do
+      isOK bare {redis = Just False} `shouldBe` True
+      A.toJSON bare {redis = Just False} `shouldSatisfy` \case
+        A.Object o -> KeyMap.lookup "redis" o == Just (A.object ["ok" A..= False])
+        _ -> False
+      A.toJSON bare `shouldSatisfy` \case
+        A.Object o -> not (KeyMap.member "redis" o)
+        _ -> False
 
   -- Other programs read these formats: they must not change by accident.
   describe "Wire format" $ do

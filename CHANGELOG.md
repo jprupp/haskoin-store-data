@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Breaking, version 1.9.0: `HealthCheck` has a field `redis`, whether the
+  Redis cache of the store answers, `Nothing` for a store without one. Code
+  that builds a `HealthCheck` has to give it. In JSON it is
+  `"redis": {"ok": true}`, left out when there is no cache; in the binary
+  encoding it is one more byte at the end. Both may be missing when read,
+  so old output still decodes, and old clients read new output. It does not
+  count towards `isOK`: a store without its Redis answers from its own
+  database and is fit to serve.
 - Breaking, version 1.9.0: `apiCall` and `apiBatch` run in plain `IO` and
   return `Either Except` the response, instead of working in any monad with
   `MonadIO` and `MonadError Except`. Where you wrote
