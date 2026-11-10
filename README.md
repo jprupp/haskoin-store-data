@@ -41,6 +41,13 @@ encoding too, so a server can answer a binary request with a binary error.
 The client reads the `Content-Type` of an error to tell which it got, and so
 works with servers of either kind.
 
+The bytes of every type, for someone who writes a client in another
+language, are in the "Binary format" section of
+[`swagger.yaml`](https://github.com/jprupp/haskoin-store/blob/master/swagger.yaml)
+in the haskoin-store repository. In short: integers are big-endian, a list
+is its length as 64 bits and then its items, and the events of `/events`
+are the one thing sent without a length.
+
 ## Building
 
 The package builds with [Stack](https://haskellstack.org) and needs
