@@ -36,6 +36,11 @@ The client appends the name of the network to the host, as in the layout of
 api.haskoin.com. The binary encoding is used on the wire, as it is smaller and
 faster to decode than JSON.
 
+Errors come back as `Left` an `Except`. From version 1.10 they have a binary
+encoding too, so a server can answer a binary request with a binary error.
+The client reads the `Content-Type` of an error to tell which it got, and so
+works with servers of either kind.
+
 ## Building
 
 The package builds with [Stack](https://haskellstack.org) and needs

@@ -32,6 +32,8 @@ spec = prepareContext $ \ctx -> do
     binaryLaws (arbitrary :: Gen BlockData)
     binaryLaws (arbitrary :: Gen Spender)
     binaryLaws (arbitrary :: Gen Prev)
+    binaryLaws (arbitrary :: Gen Except)
+    binaryLaws (arbitrary :: Gen EventStream)
     binaryLaws (arbitraryTxData ctx)
     binaryLaws (arbitrary :: Gen XPubSummary)
     binaryLaws (arbitrary :: Gen HealthCheck)

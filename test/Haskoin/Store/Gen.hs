@@ -243,6 +243,9 @@ instance (Arbitrary a) => Arbitrary (RawResult a) where
 instance (Arbitrary a) => Arbitrary (RawResultList a) where
   arbitrary = RawResultList <$> arbitrary
 
+instance Arbitrary EventStream where
+  arbitrary = EventStream <$> arbitrary
+
 arbitraryXPubBal :: Network -> Gen XPubBal
 arbitraryXPubBal net = XPubBal <$> arbitrary <*> arbitraryBalance net
 
@@ -275,7 +278,9 @@ instance Arbitrary Except where
         UserError <$> arbitrary,
         StringError <$> arbitrary,
         TxIndexConflict <$> listOf1 arbitraryTxHash,
-        return ServerTimeout
+        return ServerTimeout,
+        return RequestTooLarge,
+        return BehindFleet
       ]
 
 ---------------------------------------

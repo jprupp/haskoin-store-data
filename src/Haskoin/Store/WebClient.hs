@@ -29,6 +29,7 @@ module Haskoin.Store.WebClient
     ApiConfig (..),
     apiCall,
     apiBatch,
+    apiEvents,
 
     -- * Blocks
     GetBlock (..),
@@ -94,6 +95,7 @@ import Control.Arrow (second)
 import Control.Exception
 import Control.Lens ((.~), (?~), (^.))
 import Data.Aeson qualified as A
+import Data.ByteString qualified as BS
 import Data.Bytes.Get
 import Data.Bytes.Put
 import Data.Bytes.Serial
@@ -190,6 +192,42 @@ apiBatch ctx i conf res = go mempty (resourceBatch i res)
       apiCall ctx conf r >>= \case
         Left e -> return (Left e)
         Right b -> go (acc <> b) rs
+
+-- | Listen to the events of a server: new blocks and changes of the
+-- mempool. A function is called with each event as it comes, and says
+-- whether to go on. This returns when the function says no, when the
+-- server ends the stream, which it does to a client that falls too far
+-- behind, or with the error that the server answered.
+--
+-- 'apiCall' cannot do this: it waits for a whole response, and this one
+-- has no end.
+--
+-- > apiEvents def $ \event -> print event >> return True
+apiEvents :: ApiConfig -> (Store.Event -> IO Bool) -> IO (Either Store.Except ())
+apiEvents (ApiConfig net apiHost) handle = do
+  r <- try (try (HTTP.foldGetWith (binaryOpts mempty) step BS.empty url))
+  return $ case r of
+    Left Stopped -> Right ()
+    Right (Left e) -> Left e
+    Right (Right _) -> Right ()
+  where
+    url = apiHost <> net.name <> "/events"
+    -- an event is a byte that says what it is and a hash
+    size = 33
+    step pending chunk = go (pending <> chunk)
+    go bytes
+      | BS.length bytes < size = return bytes
+      | otherwise = do
+          let (one, rest) = BS.splitAt size bytes
+          continue <- either (\_ -> return False) handle (runGetS deserialize one)
+          if continue then go rest else throwIO Stopped
+
+-- | Thrown inside 'apiEvents' to leave the stream when the caller has
+-- heard enough.
+data Stopped = Stopped
+  deriving (Show)
+
+instance Exception Stopped
 
 -- | Requests that can be split into several smaller ones whose results are
 -- concatenated.
@@ -299,17 +337,25 @@ binaryOpts opts =
 -- | Throw the error in the body of an unsuccessful response as 'Store.Except'.
 -- A health check that answers 503 is not an error: its body says what is
 -- wrong.
+--
+-- The error is decoded as its @Content-Type@ says: binary from a server
+-- that answers a binary request with a binary error, and JSON from one of
+-- before version 1.10 of this package, which sent every error as JSON.
 checkStatus :: ResponseChecker
 checkStatus req res
   | statusIsSuccessful status = return ()
   | isHealthPath && code == 503 = return () -- Ignore health checks
   | otherwise = do
-      e <- A.decodeStrict <$> res ^. HTTP.responseBody
+      body <- res ^. HTTP.responseBody
       throwIO $
-        case e of
+        case decoded body of
           Just except -> except :: Store.Except
           Nothing -> Store.StringError "could not decode error"
   where
+    binary = "application/octet-stream" `BS.isPrefixOf` (res ^. HTTP.responseHeader "Content-Type")
+    decoded body
+      | binary = either (const Nothing) Just (runGetS deserialize body)
+      | otherwise = A.decodeStrict body
     code = res ^. HTTP.responseStatus . HTTP.statusCode
     message = res ^. HTTP.responseStatus . HTTP.statusMessage
     status = mkStatus code message

@@ -6,6 +6,42 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-10
+
+### Added
+
+- Errors have a binary encoding: `Except` has `Serial`, `Serialize` and
+  `Binary` instances. It is one byte that says which error, followed by the
+  message of `UserError` and `StringError`, as UTF-8 with its length, or
+  by the transactions of `TxIndexConflict`. Until now a server answered an
+  error in JSON whatever the client had asked for, so a client that spoke
+  binary needed a JSON decoder for that one case.
+- `apiCall` and `apiBatch` decode an error as the `Content-Type` of the
+  response says: binary from a server that sends binary errors, JSON from
+  an older one. A client built with this version works with both.
+
+- `apiEvents` listens to the events of a server and calls a function with
+  each as it comes. `apiCall` could not: it waits for a whole response, and
+  that one has no end.
+
+### Changed
+
+- Breaking, version 1.10.0, on the wire: `RawResultList`, the answer of
+  `/transactions/raw`, `/block/{block}/transactions/raw` and
+  `/block/height/{height}/raw`, starts with the number of its values, like
+  every other list. It was the values alone, one after the other. A client
+  and a server have to be of the same side of this change for those three
+  endpoints.
+- Breaking, version 1.10.0: the response of `GetEvents` is an
+  `EventStream`, events one after the other with no count, which is what
+  servers have always sent. It was declared as a `SerialList`, whose count
+  was never there.
+- Breaking, version 1.10.0: `Except` has a `BehindFleet` constructor, for
+  the 503 of a server that is one of a fleet and does not have the block
+  that the fleet answers from. In JSON it is `"error": "behind-fleet"`, as
+  such servers already answered. Code that matches every constructor of
+  `Except` has to add it.
+
 ## [1.9.0] - 2026-11-10
 
 ### Changed

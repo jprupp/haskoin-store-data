@@ -78,6 +78,7 @@ module Haskoin.Store.Data
     SerialList (..),
     RawResult (..),
     RawResultList (..),
+    EventStream (..),
     PeerInfo (..),
     Healthy (..),
     BlockHealth (..),
@@ -2080,20 +2081,47 @@ instance (FromJSON a) => FromJSON (SerialList a) where
   parseJSON = fmap SerialList . parseJSON
 
 -- | List of values in their peer-to-peer serialization, encoded in JSON as a
--- list of hex strings.
+-- list of hex strings. In binary it is the number of values and then the
+-- values, like every other list of the API. Before version 1.10 it was the
+-- values alone, one after the other, which only a reader that knew where
+-- the body ended could take apart.
 newtype RawResultList a = RawResultList {get :: [a]}
   deriving stock (Show, Eq, Generic)
   deriving anyclass (NFData)
 
 instance (Serial a) => Serial (RawResultList a) where
-  serialize (RawResultList xs) =
-    mapM_ serialize xs
-  deserialize = RawResultList <$> go
+  serialize (RawResultList xs) = putList serialize xs
+  deserialize = RawResultList <$> getList deserialize
+
+-- | The events of a server as @\/events@ sends them in binary: one after
+-- the other, for as long as the connection is open, with no count before
+-- them, since there is no telling how many will come. Decoding reads
+-- events until the input ends, so it is for a piece of the stream that
+-- holds whole events; 'Haskoin.Store.WebClient.apiEvents' reads the stream
+-- as it comes.
+--
+-- The endpoint used to be declared as a t'SerialList' of events, which has
+-- a count before it that the server never sent.
+newtype EventStream = EventStream {get :: [Event]}
+  deriving stock (Show, Eq, Generic)
+  deriving anyclass (NFData)
+
+instance Serial EventStream where
+  serialize (EventStream es) = mapM_ serialize es
+  deserialize = EventStream <$> go
     where
       go =
         isEmpty >>= \case
           True -> return []
           False -> (:) <$> deserialize <*> go
+
+instance Serialize EventStream where
+  put = serialize
+  get = deserialize
+
+instance Binary EventStream where
+  put = serialize
+  get = deserialize
 
 instance (Serial a) => Serialize (RawResultList a) where
   put = serialize
@@ -2169,9 +2197,56 @@ data Except
     ServerTimeout
   | -- | the request asks for too much (413)
     RequestTooLarge
+  | -- | the server is one of a fleet and does not have the block that the
+    -- fleet answers from; another server of the fleet does (503)
+    BehindFleet
   deriving (Show, Eq, Ord, Generic, NFData)
 
 instance Exception Except
+
+-- | An error in the binary encoding: one byte that says which, followed by
+-- the message of those that have one, as UTF-8 with its length, or by the
+-- transactions of a 'TxIndexConflict'.
+--
+-- Errors used to be JSON whatever the client asked for, because this
+-- instance did not exist. A client that asks for binary now gets every
+-- answer in binary, and needs no JSON decoder for the one case that it
+-- hopes not to meet.
+instance Serial Except where
+  serialize = \case
+    ThingNotFound -> putWord8 0x00
+    ServerError -> putWord8 0x01
+    BadRequest -> putWord8 0x02
+    UserError m -> putWord8 0x03 >> message m
+    StringError m -> putWord8 0x04 >> message m
+    TxIndexConflict ts -> putWord8 0x05 >> putList serialize ts
+    ServerTimeout -> putWord8 0x06
+    RequestTooLarge -> putWord8 0x07
+    BehindFleet -> putWord8 0x08
+    where
+      message = putLengthBytes . T.encodeUtf8 . T.pack
+  deserialize =
+    getWord8 >>= \case
+      0x00 -> return ThingNotFound
+      0x01 -> return ServerError
+      0x02 -> return BadRequest
+      0x03 -> UserError <$> message
+      0x04 -> StringError <$> message
+      0x05 -> TxIndexConflict <$> getList deserialize
+      0x06 -> return ServerTimeout
+      0x07 -> return RequestTooLarge
+      0x08 -> return BehindFleet
+      _ -> fail "Not an error of the API"
+    where
+      message = getLengthBytes >>= either (fail . show) (return . T.unpack) . T.decodeUtf8'
+
+instance Serialize Except where
+  put = serialize
+  get = deserialize
+
+instance Binary Except where
+  put = serialize
+  get = deserialize
 
 instance ToJSON Except where
   toJSON e =
@@ -2210,6 +2285,10 @@ instance ToJSON Except where
           [ "error" .= String "request-too-large",
             "message" .= String "Request body too large"
           ]
+        BehindFleet ->
+          [ "error" .= String "behind-fleet",
+            "message" .= String "This server is behind the other servers of its fleet"
+          ]
 
 instance FromJSON Except where
   parseJSON =
@@ -2234,6 +2313,8 @@ instance FromJSON Except where
           return ServerTimeout
         String "request-too-large" ->
           return RequestTooLarge
+        String "behind-fleet" ->
+          return BehindFleet
         _ -> mzero
 
 ---------------------------------------

@@ -393,7 +393,7 @@ instance ApiResource GetMempool (Store.SerialList TxHash) where
   resourcePath _ _ = "/mempool"
   queryParams (GetMempool l o) = ([], noMaybeBox l <> noDefBox o)
 
-instance ApiResource GetEvents (Store.SerialList Store.Event) where
+instance ApiResource GetEvents Store.EventStream where
   resourcePath _ _ = "/events"
 
 -------------

@@ -5,7 +5,7 @@ cabal-version: 1.18
 -- see: https://github.com/sol/hpack
 
 name:           haskoin-store-data
-version:        1.9.0
+version:        1.10.0
 synopsis:       Data types and API client of Haskoin Store
 description:    The types of the data that Haskoin Store serves (blocks, transactions,
                 balances, unspent outputs, extended public keys, health checks, events and
