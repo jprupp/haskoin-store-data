@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-10
+
 ### Changed
 
 - Breaking, version 1.9.0: `HealthCheck` has a field `redis`, whether the
