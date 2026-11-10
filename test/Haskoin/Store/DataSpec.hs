@@ -22,6 +22,7 @@ import Haskoin.Store.Gen
 import Haskoin.Store.Laws
 import Haskoin.Util.Arbitrary
 import Test.Hspec
+import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck
 
 spec :: Spec
@@ -81,6 +82,11 @@ spec = prepareContext $ \ctx -> do
     jsonLaws (arbitrary :: Gen BinfoHeader)
     jsonLaws (arbitrary :: Gen BinfoBlockInfos)
 
+  describe "binary of a network" $
+    prop "EventCommand" . forAll (elements allNets) $ \net ->
+      forAll (arbitraryEventCommand net ctx) $ \x ->
+        unmarshal (net, ctx) (marshal (net, ctx) x) === Right x
+
   -- Balance, Unspent, StoreInput, StoreOutput and the inputs and outputs of
   -- BinfoTx are encoded through their own instances inside these.
   describe "JSON of a network" $ do
@@ -89,6 +95,7 @@ spec = prepareContext $ \ctx -> do
     marshalLaws id arbitraryXPubUnspent
     marshalLaws id arbitraryBlockData
     marshalLaws id arbitraryTransaction
+    marshalLaws withCtx (`arbitraryEventCommand` ctx)
     marshalLaws withCtx (`arbitraryBinfoMultiAddr` ctx)
     marshalLaws withCtx (`arbitraryBinfoBalance` ctx)
     marshalLaws withCtx (`arbitraryBinfoBlock` ctx)

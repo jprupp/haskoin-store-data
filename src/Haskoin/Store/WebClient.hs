@@ -30,6 +30,7 @@ module Haskoin.Store.WebClient
     apiCall,
     apiBatch,
     apiEvents,
+    apiEventsAfter,
 
     -- * Blocks
     GetBlock (..),
@@ -104,6 +105,7 @@ import Data.Monoid (Endo (..), appEndo)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Haskoin.Block (blockHashToHex)
 import Haskoin.Crypto (Ctx)
 import Haskoin.Network
 import Haskoin.Store.Data qualified as Store
@@ -204,14 +206,34 @@ apiBatch ctx i conf res = go mempty (resourceBatch i res)
 --
 -- > apiEvents def $ \event -> print event >> return True
 apiEvents :: ApiConfig -> (Store.Event -> IO Bool) -> IO (Either Store.Except ())
-apiEvents (ApiConfig net apiHost) handle = do
+apiEvents conf = listenEvents conf Nothing
+
+-- | 'apiEvents' from an event on: the function is called with what came
+-- after it. A client that lost its connection calls this with the last
+-- event it heard, and misses nothing.
+--
+-- The server keeps its last ten thousand events. When it no longer has the
+-- one given, or never had it, the answer is 'Store.ThingNotFound': the
+-- client cannot know what it missed, and has to read what it follows again
+-- and listen with 'apiEvents'. A transaction has an event when it enters
+-- the mempool and another if it leaves unconfirmed, both with its hash, and
+-- the server starts after the first: some events may be told twice, none
+-- is left out. In a fleet any server takes up from an event of another.
+apiEventsAfter :: ApiConfig -> Store.Event -> (Store.Event -> IO Bool) -> IO (Either Store.Except ())
+apiEventsAfter conf = listenEvents conf . Just
+
+-- | The events of a server, from now or from after one of them.
+listenEvents :: ApiConfig -> Maybe Store.Event -> (Store.Event -> IO Bool) -> IO (Either Store.Except ())
+listenEvents (ApiConfig net apiHost) after handle = do
   r <- try (try (HTTP.foldGetWith (binaryOpts mempty) step BS.empty url))
   return $ case r of
     Left Stopped -> Right ()
     Right (Left e) -> Left e
     Right (Right _) -> Right ()
   where
-    url = apiHost <> net.name <> "/events"
+    url = apiHost <> net.name <> "/events" <> maybe "" (("?after=" <>) . cs . name) after
+    name (Store.EventBlock h) = blockHashToHex h
+    name (Store.EventTx h) = txHashToHex h
     -- an event is a byte that says what it is and a hash
     size = 33
     step pending chunk = go (pending <> chunk)

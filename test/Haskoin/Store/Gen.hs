@@ -14,6 +14,7 @@ module Haskoin.Store.Gen
     arbitraryStoreOutput,
     arbitraryTransaction,
     arbitraryXPubSpec,
+    arbitraryEventCommand,
     arbitraryDeriveType,
     arbitraryBalance,
     arbitraryUnspent,
@@ -268,6 +269,21 @@ instance Arbitrary Event where
       [ EventBlock <$> arbitraryBlockHash,
         EventTx <$> arbitraryTxHash
       ]
+
+-- | A command for the events of a network, of every kind.
+arbitraryEventCommand :: Network -> Ctx -> Gen EventCommand
+arbitraryEventCommand net ctx =
+  oneof
+    [ EventWatch <$> listOf (arbitraryAddress net),
+      EventUnwatch <$> listOf (arbitraryAddress net),
+      EventWatchXPub <$> arbitraryXPubSpec net ctx,
+      EventUnwatchXPub <$> arbitraryXPubSpec net ctx,
+      EventFilterLoad <$> arbitraryBloomFilter,
+      EventFilterAdd . B.pack <$> (choose (0, maxFilterAddSize) >>= vector),
+      return EventFilterClear,
+      return EventAll,
+      return EventNone
+    ]
 
 instance Arbitrary Except where
   arbitrary =

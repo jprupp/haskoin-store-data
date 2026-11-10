@@ -87,6 +87,7 @@ module Haskoin.Store.Data
     MaxHealth (..),
     HealthCheck (..),
     Event (..),
+    EventCommand (..),
     Except (..),
 
     -- * Blockchain.info API
@@ -137,7 +138,7 @@ where
 import Control.Applicative (optional, (<|>))
 import Control.DeepSeq (NFData)
 import Control.Exception (Exception)
-import Control.Monad (guard, join, mzero, unless)
+import Control.Monad (guard, join, mzero, unless, when)
 import Data.Aeson
   ( FromJSON (..),
     ToJSON (..),
@@ -178,6 +179,7 @@ import Data.Maybe
     mapMaybe,
     maybeToList,
   )
+import Data.Sequence qualified as Seq
 import Data.Serialize (Serialize (..))
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -193,7 +195,7 @@ import Data.Time.Format
     parseTimeM,
   )
 import Data.Vector qualified as V
-import Data.Word (Word32, Word64)
+import Data.Word (Word32, Word64, Word8)
 import GHC.Generics (Generic)
 import Haskoin
 import Text.Read (readMaybe)
@@ -1999,6 +2001,181 @@ instance FromJSON Event where
           i <- o .: "id"
           return $ EventBlock i
         _ -> fail $ "Could not recognize event type: " <> t
+
+-- | What a client says to the server over the WebSocket at @\/events@, to
+-- choose the transactions it hears about.
+--
+-- A wallet cares for its own transactions, and a busy mempool has thousands
+-- of others, each an event that costs the client a request to find out it
+-- was not for it. With these the server does the sorting: it knows the body
+-- of every transaction as it comes in, and tells a client only of those that
+-- touch what the client watches. It follows the three ways a wallet has of
+-- saying what is its own: a list of addresses, an extended public key, and
+-- the Bloom filter of BIP 37 that SPV clients send to a node, which hides
+-- the addresses among false positives.
+--
+-- A connection starts unfiltered and hears of every transaction, as it did
+-- before these existed, unless the URL that opened it says otherwise. The
+-- first of these commands, other than 'EventAll', turns it into a filtered
+-- one, which hears of a transaction
+-- when it matches the filter or pays to or spends from a watched address or
+-- one derived from a watched key. Blocks are always reported: there are few,
+-- and they are how a client knows that its transactions confirmed.
+--
+-- There are no answers. As between a node and an SPV client, a command the
+-- server cannot accept ends the connection, with the reason in the close
+-- frame.
+--
+-- In binary a command is one byte, the number given with each below, and
+-- then what it carries ('Marshal'). In JSON it is an object with a @type@
+-- ('MarshalJSON'). A key is watched under one type of address; a wallet
+-- that uses several sends a command for each.
+data EventCommand
+  = -- | @0x00@, @{"type":"watch","addresses":[...]}@: watch these
+    -- addresses as well; a counted list in binary
+    EventWatch ![Address]
+  | -- | @0x01@, @{"type":"unwatch","addresses":[...]}@: stop watching
+    -- these addresses
+    EventUnwatch ![Address]
+  | -- | @0x02@, @{"type":"watch","xpub":"...","derive":"segwit"}@: watch
+    -- the addresses of this key as well, those in use and the gap after
+    -- them, which moves on as they get used; @derive@ may be left out for
+    -- legacy addresses; in binary the 78 bytes of the key as in BIP 32 and
+    -- a byte for the type, @00@ legacy, @01@ compat, @02@ segwit
+    EventWatchXPub !XPubSpec
+  | -- | @0x03@, @{"type":"unwatch","xpub":"...","derive":"segwit"}@: stop
+    -- watching this key
+    EventUnwatchXPub !XPubSpec
+  | -- | @0x04@,
+    -- @{"type":"filterload","filter":"hex","functions":n,"tweak":n,"flags":n}@:
+    -- set the Bloom filter of the connection, in place of the one it had;
+    -- in binary it is laid out as in the @filterload@ message of the
+    -- Bitcoin protocol
+    EventFilterLoad !BloomFilter
+  | -- | @0x05@, @{"type":"filteradd","data":"hex"}@: add an element of at
+    -- most 'maxFilterAddSize' bytes to the filter; bytes with their
+    -- length in binary
+    EventFilterAdd !ByteString
+  | -- | @0x06@, @{"type":"filterclear"}@: remove the filter; the addresses
+    -- and keys stay watched
+    EventFilterClear
+  | -- | @0x07@, @{"type":"all"}@: forget everything watched and the filter,
+    -- and hear of every transaction again
+    EventAll
+  | -- | @0x08@, @{"type":"none"}@: forget everything watched and the filter,
+    -- and hear of no transaction, only of blocks, until something is
+    -- watched
+    EventNone
+  deriving (Show, Eq, Generic, NFData)
+
+-- | The binary form, for binary frames. It takes the network and the
+-- context because an extended public key is written as BIP 32 writes it,
+-- in the 78 bytes that the Base58Check of its text decodes to, which every
+-- wallet library has: the bytes that the database uses for a key are those
+-- of one C library, and no client in another language could make them.
+instance Marshal (Network, Ctx) EventCommand where
+  marshalPut s = \case
+    EventWatch as -> putWord8 0x00 >> putList serialize as
+    EventUnwatch as -> putWord8 0x01 >> putList serialize as
+    EventWatchXPub x -> putWord8 0x02 >> marshalPut s x.key >> serialize x.deriv
+    EventUnwatchXPub x -> putWord8 0x03 >> marshalPut s x.key >> serialize x.deriv
+    EventFilterLoad f -> putWord8 0x04 >> serialize f
+    EventFilterAdd d -> putWord8 0x05 >> putLengthBytes d
+    EventFilterClear -> putWord8 0x06
+    EventAll -> putWord8 0x07
+    EventNone -> putWord8 0x08
+  marshalGet s =
+    getWord8 >>= \case
+      0x00 -> EventWatch <$> getList deserialize
+      0x01 -> EventUnwatch <$> getList deserialize
+      0x02 -> EventWatchXPub <$> xpub
+      0x03 -> EventUnwatchXPub <$> xpub
+      0x04 -> EventFilterLoad <$> deserialize
+      0x05 -> EventFilterAdd <$> (filterElement =<< getLengthBytes)
+      0x06 -> return EventFilterClear
+      0x07 -> return EventAll
+      0x08 -> return EventNone
+      _ -> fail "Not an EventCommand"
+    where
+      xpub = do
+        key <- marshalGet s
+        deriv <-
+          getWord8 >>= \case
+            0x00 -> return DeriveNormal
+            0x01 -> return DeriveP2SH
+            0x02 -> return DeriveP2WPKH
+            _ -> fail "Unknown derivation"
+        return XPubSpec {..}
+
+-- | An element for a Bloom filter, refused when longer than a node takes.
+filterElement :: (MonadFail m) => ByteString -> m ByteString
+filterElement d
+  | B.length d > maxFilterAddSize = fail "Filter element too long"
+  | otherwise = return d
+
+-- | The text of an address depends on the network, and that of an extended
+-- public key needs the context of the library that checks it.
+instance MarshalJSON (Network, Ctx) EventCommand where
+  marshalValue (net, ctx) = \case
+    EventWatch as -> addresses "watch" as
+    EventUnwatch as -> addresses "unwatch" as
+    EventWatchXPub x -> xpub "watch" x
+    EventUnwatchXPub x -> xpub "unwatch" x
+    EventFilterLoad f ->
+      A.object
+        [ "type" .= String "filterload",
+          "filter" .= encodeHex (B.pack (toList f.array)),
+          "functions" .= f.functions,
+          "tweak" .= f.tweak,
+          "flags" .= B.head (runPutS (serialize f.flags))
+        ]
+    EventFilterAdd d ->
+      A.object ["type" .= String "filteradd", "data" .= encodeHex d]
+    EventFilterClear -> A.object ["type" .= String "filterclear"]
+    EventAll -> A.object ["type" .= String "all"]
+    EventNone -> A.object ["type" .= String "none"]
+    where
+      addresses t as =
+        A.object ["type" .= String t, "addresses" .= map (marshalValue net) as]
+      xpub t x =
+        A.object
+          [ "type" .= String t,
+            "xpub" .= marshalValue (net, ctx) x.key,
+            "derive" .= deriveTypeToText x.deriv
+          ]
+
+  unmarshalValue (net, ctx) =
+    A.withObject "EventCommand" $ \o ->
+      o .: "type" >>= \case
+        "watch" -> watched o EventWatch EventWatchXPub
+        "unwatch" -> watched o EventUnwatch EventUnwatchXPub
+        "filterload" -> do
+          bytes <- hex =<< o .: "filter"
+          when (B.length bytes > maxBloomSize) $ fail "Filter too large"
+          functions <- o .: "functions"
+          when (functions > maxHashFuncs) $ fail "Too many hash functions"
+          tweak <- o .:? "tweak" .!= 0
+          flags <- o .:? "flags" .!= (0 :: Word8) >>= flag
+          return . EventFilterLoad $
+            BloomFilter {array = Seq.fromList (B.unpack bytes), ..}
+        "filteradd" -> fmap EventFilterAdd $ o .: "data" >>= hex >>= filterElement
+        "filterclear" -> return EventFilterClear
+        "all" -> return EventAll
+        "none" -> return EventNone
+        t -> fail $ "Could not recognize command type: " <> t
+    where
+      watched o as xs =
+        o .:? "xpub" >>= \case
+          Just v -> do
+            key <- unmarshalValue (net, ctx) v
+            name <- o .:? "derive" .!= "legacy"
+            deriv <- maybe (fail "Unknown derivation") return (textToDeriveType name)
+            return $ xs XPubSpec {..}
+          Nothing -> fmap as $ o .: "addresses" >>= mapM (unmarshalValue net)
+      hex = maybe (fail "Not hexadecimal") return . decodeHex
+      flag n
+        | n > 2 = fail "Unknown filter flags"
+        | otherwise = either fail return $ runGetS deserialize (B.singleton n)
 
 -- | Response that wraps a single value, encoded in JSON as @{\"result\": value}@.
 newtype GenericResult a = GenericResult {get :: a}

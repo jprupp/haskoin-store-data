@@ -15,7 +15,7 @@ database or network node of its own, so it is small to depend on.
 - `Haskoin.Store.WebCommon`: the requests of the API, one type per endpoint,
   with their paths and parameters.
 - `Haskoin.Store.WebClient`: `apiCall`, which sends a request and decodes
-  the answer.
+  the answer, and `apiEvents`, which listens to the events of a server.
 
 ## Example
 
@@ -40,6 +40,33 @@ Errors come back as `Left` an `Except`. From version 1.10 they have a binary
 encoding too, so a server can answer a binary request with a binary error.
 The client reads the `Content-Type` of an error to tell which it got, and so
 works with servers of either kind.
+
+## Events
+
+`apiEvents` calls a function with each new block and each transaction that
+enters or leaves the mempool, for as long as the function answers `True`.
+After a lost connection, `apiEventsAfter` takes up from the last event
+heard, so nothing is missed; if the server no longer has that event it
+answers `ThingNotFound`, and the client reads what it follows again.
+
+Over the WebSocket at `/events` a client can also choose the transactions
+it hears about. `EventCommand` is what it sends: addresses to watch,
+extended public keys (one command for each type of address), or a Bloom
+filter as in BIP 37. It has a binary encoding and a JSON one, for binary
+and text frames. This package has no WebSocket client of its own; send the
+encoded command with the one you use:
+
+```haskell
+import Haskoin (marshalJSON)
+import Haskoin.Store.Data (EventCommand (..))
+
+-- a text frame: {"type":"watch","addresses":["bc1q…"]}
+frame = marshalJSON (net, ctx) (EventWatch [addr])
+```
+
+Blocks are always told. A connection that has sent no command hears of
+every transaction, unless its URL says what to watch, or `quiet=true` for
+blocks alone.
 
 The bytes of every type, for someone who writes a client in another
 language, are in the "Binary format" section of

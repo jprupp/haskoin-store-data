@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-11-10
+
+### Added
+
+- `EventCommand`: what a client sends over the WebSocket at `/events` to
+  choose the transactions it hears about. It watches addresses
+  (`EventWatch`, `EventUnwatch`), extended public keys with a type of
+  address (`EventWatchXPub`, `EventUnwatchXPub`), or what matches a Bloom
+  filter as in BIP 37 (`EventFilterLoad`, `EventFilterAdd`,
+  `EventFilterClear`); `EventAll` goes back to every transaction, and
+  `EventNone` to blocks alone. It has
+  `Marshal` for binary frames and `MarshalJSON` for text frames, both given
+  the network. A key is written in binary as in BIP 32, in the 78 bytes
+  that its text decodes to. Servers understand it from the release of
+  haskoin-store after 1.8.1.
+- `apiEventsAfter` listens to the events that came after one that the
+  client names, so that a client that lost its connection misses nothing.
+  The server answers `ThingNotFound` when it no longer has that event.
+
 ## [1.10.0] - 2026-11-10
 
 ### Added
