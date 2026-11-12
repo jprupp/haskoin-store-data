@@ -134,10 +134,10 @@ module Haskoin.Store.Data
   )
 where
 
-import Control.Applicative (optional, (<|>))
+import Control.Applicative ((<|>))
 import Control.DeepSeq (NFData)
 import Control.Exception (Exception)
-import Control.Monad (guard, join, mzero, when)
+import Control.Monad (guard, join, mzero, when, unless)
 import Data.Aeson
   ( FromJSON (..),
     ToJSON (..),
@@ -156,7 +156,6 @@ import Data.Bool (bool)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as B
 import Data.Bytes.Get
-import Data.Bytes.Get qualified as Bytes.Get
 import Data.Bytes.Put
 import Data.Bytes.Serial
 import Data.Default (Default (..))
@@ -184,6 +183,7 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as T
+import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX
   ( posixSecondsToUTCTime,
     utcTimeToPOSIXSeconds,
@@ -244,7 +244,7 @@ instance Serial DeriveType where
       0x00 -> return DeriveNormal
       0x01 -> return DeriveP2SH
       0x02 -> return DeriveP2WPKH
-      _ -> return DeriveNormal
+      x -> fail ("Unknown derivation type: " <> show x)
 
 instance Binary DeriveType where
   put = serialize
@@ -380,7 +380,8 @@ instance ToJSON BlockRef where
 
 instance FromJSON BlockRef where
   parseJSON =
-    A.withObject "BlockRef" $ \o -> b o <|> m o
+    A.withObject "BlockRef" $ \o ->
+      b o <|> m o <|> fail "Expected height and position, or mempool"
     where
       b o = do
         height <- o .: "height"
@@ -656,7 +657,7 @@ instance MarshalJSON Network Unspent where
       script <- o .: "pkscript" >>= jsonHex
       address <-
         o .: "address"
-          >>= maybe (return Nothing) (optional . unmarshalValue net)
+          >>= maybe (return Nothing) (fmap Just . unmarshalValue net)
       return Unspent {outpoint = OutPoint {..}, ..}
 
 -- | Database value for a block entry.
@@ -890,7 +891,7 @@ instance MarshalJSON Network StoreInput where
           value <- o .: "value"
           address <-
             o .: "address"
-              >>= maybe (return Nothing) (optional . unmarshalValue net)
+              >>= maybe (return Nothing) (fmap Just . unmarshalValue net)
           return StoreInput {..}
 
 -- | Parse a hex string in JSON.
@@ -981,7 +982,7 @@ instance MarshalJSON Network StoreOutput where
       spender <- o .: "spender"
       address <-
         o .: "address"
-          >>= maybe (return Nothing) (optional . unmarshalValue net)
+          >>= maybe (return Nothing) (fmap Just . unmarshalValue net)
       return StoreOutput {..}
 
 -- | Output spent by an input, as stored with the transaction.
@@ -1086,12 +1087,48 @@ instance Binary TxData where
   put = serialize
   get = deserialize
 
--- | Fee of a transaction: inputs minus outputs, or zero for a coinbase.
+-- | A whole number written in decimal digits and nothing else, if it fits
+-- its type. 'Text.Read.readMaybe' also takes a sign, hexadecimal and
+-- spaces around, and wraps a number that does not fit: @-1@ read as the
+-- largest number of the type.
+decimal :: forall a. (Integral a, Bounded a) => Text -> Maybe a
+decimal t
+  | T.null t || T.length t > 20 || T.any (\c -> c < '0' || c > '9') t = Nothing
+  | n > toInteger (maxBound :: a) = Nothing
+  | otherwise = Just (fromInteger n)
+  where
+    n = T.foldl' (\acc c -> acc * 10 + toInteger (fromEnum c - fromEnum '0')) 0 t
+
+-- | The seconds of a time since 1970, if it is not before then and they
+-- fit in 64 bits.
+unixSeconds :: UTCTime -> Maybe Word64
+unixSeconds t
+  | s < 0 || s > toInteger (maxBound :: Word64) = Nothing
+  | otherwise = Just (fromInteger s)
+  where
+    s = floor (utcTimeToPOSIXSeconds t) :: Integer
+
+-- | Read one value from all of the bytes: bytes after it are an error.
+whole :: (Serial a) => ByteString -> Either String a
+whole = runGetS $ do
+  x <- deserialize
+  end <- isEmpty
+  unless end (fail "Bytes after the value")
+  return x
+
+-- | A difference that stops at zero. Amounts are unsigned, and one taken
+-- from a smaller one would wrap around to a number near 2^64.
+minus :: Word64 -> Word64 -> Word64
+minus a b = if a >= b then a - b else 0
+
+-- | Fee of a transaction: inputs minus outputs, or zero for a coinbase, and
+-- for a transaction whose outputs are worth more than the inputs that the
+-- store has for it.
 txDataFee :: TxData -> Word64
 txDataFee t =
   if isCoinbaseTx t.tx
     then 0
-    else inputs - outputs
+    else inputs `minus` outputs
   where
     inputs = sum $ map (.value) $ IntMap.elems t.prevs
     outputs = sum $ map (.value) t.tx.outputs
@@ -1116,7 +1153,7 @@ toTransaction net ctx t =
       fee =
         if any isCoinbase ins
           then 0
-          else inv - outv
+          else inv `minus` outv
     }
   where
     -- Serialize once with the witness and once without it, and only once
@@ -1279,7 +1316,7 @@ data PeerInfo = PeerInfo
 instance ToJSON PeerInfo where
   toJSON p =
     A.object
-      [ "useragent" .= String (T.decodeUtf8 p.userAgent),
+      [ "useragent" .= String (T.decodeUtf8Lenient p.userAgent),
         "address" .= p.address,
         "version" .= p.version,
         "services"
@@ -1289,7 +1326,7 @@ instance ToJSON PeerInfo where
   toEncoding p =
     A.pairs $
       mconcat
-        [ "useragent" `A.pair` A.text (T.decodeUtf8 p.userAgent),
+        [ "useragent" `A.pair` A.text (T.decodeUtf8Lenient p.userAgent),
           "address" `A.pair` toEncoding p.address,
           "version" `A.pair` A.int32 p.version,
           "services" `A.pair` hexEncoding (runPutL $ serialize p.services),
@@ -1305,7 +1342,7 @@ instance FromJSON PeerInfo where
       version <- o .: "version"
       services <-
         o .: "services" >>= jsonHex >>= \b ->
-          case runGetS deserialize b of
+          case whole b of
             Left e -> fail $ "Could not decode services: " <> e
             Right s -> return s
       relay <- o .: "relay"
@@ -1470,10 +1507,8 @@ data BlockHealth = BlockHealth
 
 instance Healthy BlockHealth where
   isOK x =
-    h - b <= x.max
-    where
-      h = fromIntegral x.headers
-      b = fromIntegral x.blocks
+    -- as integers: the difference of two heights does not fit their type
+    toInteger x.headers - toInteger x.blocks <= toInteger x.max
 
 instance ToJSON BlockHealth where
   toJSON h =
@@ -1648,8 +1683,10 @@ instance FromJSON HealthCheck where
       peers <- o .: "peers"
       network <- o .: "net"
       version <- o .: "version"
-      utcTime <- read <$> o .: "time"
-      let time = round $ utcTimeToPOSIXSeconds utcTime
+      -- 'read' would say yes to any text here, and fail with 'error' when
+      -- the time is used, after the parser has answered
+      utcTime <- o .: "time" >>= \t -> maybe (fail ("Not a time: " <> t)) return (readMaybe t)
+      time <- maybe (fail "A time before 1970, or too far ahead") return (unixSeconds utcTime)
       redis <- o .:? "redis" >>= mapM (.: "ok")
       return HealthCheck {..}
 
@@ -1842,10 +1879,8 @@ instance (Serial a) => FromJSON (RawResult a) where
   parseJSON =
     A.withObject "RawResult" $ \o -> do
       res <- o .: "result"
-      let m =
-            eitherToMaybe . Bytes.Get.runGetS deserialize
-              =<< decodeHex res
-      maybe mzero (return . RawResult) m
+      let m = eitherToMaybe . whole =<< decodeHex res
+      maybe (fail "Not the hexadecimal of one value") (return . RawResult) m
 
 -- | List response, a JSON array.
 newtype SerialList a = SerialList {get :: [a]}
@@ -1888,10 +1923,10 @@ instance (Serial a) => FromJSON (RawResultList a) where
     A.withArray "RawResultList" $ \vec ->
       RawResultList <$> mapM parseElem (toList vec)
     where
-      deser = eitherToMaybe . runGetS deserialize
+      deser = eitherToMaybe . whole
       parseElem =
         A.withText "RawResultListItem" $ \t ->
-          maybe mzero return (decodeHex t >>= deser)
+          maybe (fail "Not the hexadecimal of one value") return (decodeHex t >>= deser)
 
 -- | Hash of a transaction, as returned when posting one, encoded in JSON as
 -- @{\"txid\": hash}@.
@@ -1978,7 +2013,13 @@ instance FromJSON Except where
   parseJSON =
     A.withObject "Except" $ \o -> do
       ctr <- o .: "error"
-      msg' <- o .:? "message" .!= ""
+      -- a message that is not text is shown as it is: an error with an
+      -- odd message is still that error
+      msg' <-
+        o .:? "message" >>= \case
+          Nothing -> return ""
+          Just (String t) -> return (T.unpack t)
+          Just other -> return (cs (A.encode other))
       case ctr of
         String "not-found-or-invalid-arg" ->
           return ThingNotFound
@@ -1999,7 +2040,12 @@ instance FromJSON Except where
           return RequestTooLarge
         String "behind-fleet" ->
           return BehindFleet
-        _ -> mzero
+        -- an error from a newer server: its name and message are kept,
+        -- instead of failing to read the answer at all
+        String other ->
+          return . StringError $
+            T.unpack other <> (if null msg' then "" else ": " <> msg')
+        _ -> fail "The error is not named by a text"
 
 ---------------------------------------
 -- Blockchain.info API Compatibility --
@@ -2026,7 +2072,7 @@ data BinfoBlockId
 parseBinfoBlockId :: Text -> Maybe BinfoBlockId
 parseBinfoBlockId t =
   (BinfoBlockHash <$> hexToBlockHash t)
-    <|> (BinfoBlockIndex <$> readMaybe (cs t))
+    <|> (BinfoBlockIndex <$> decimal t)
 
 -- | Transaction identified by hash or by short number; see 'toIntTxId'.
 data BinfoTxId
@@ -2046,7 +2092,7 @@ encodeBinfoTxId True = BinfoTxIdIndex . toIntTxId
 parseBinfoTxId :: Text -> Maybe BinfoTxId
 parseBinfoTxId t =
   (BinfoTxIdHash <$> hexToTxHash t)
-    <|> (BinfoTxIdIndex <$> readMaybe (cs t))
+    <|> (BinfoTxIdIndex <$> decimal t)
 
 instance ToJSON BinfoTxId where
   toJSON (BinfoTxIdHash h) = toJSON h
@@ -2079,7 +2125,7 @@ data BinfoFilter
 -- Blockchain.info uses for it.
 parseBinfoFilter :: Text -> Maybe BinfoFilter
 parseBinfoFilter t =
-  readMaybe (cs t) >>= \case
+  decimal t >>= \case
     (0 :: Int) -> Just BinfoFilterAll
     1 -> Just BinfoFilterSent
     2 -> Just BinfoFilterReceived
@@ -2682,7 +2728,7 @@ instance MarshalJSON (Network, Ctx) BinfoTx where
         "size" .= t.size,
         "weight" .= t.weight,
         "fee" .= t.fee,
-        "relayed_by" .= T.decodeUtf8 t.relayed,
+        "relayed_by" .= T.decodeUtf8Lenient t.relayed,
         "lock_time" .= t.locktime,
         "tx_index" .= t.index,
         "double_spend" .= t.doubleSpend,
@@ -2711,7 +2757,7 @@ instance MarshalJSON (Network, Ctx) BinfoTx where
           "size" `A.pair` A.word32 t.size,
           "weight" `A.pair` A.word32 t.weight,
           "fee" `A.pair` A.word64 t.fee,
-          "relayed_by" `A.pair` A.text (T.decodeUtf8 t.relayed),
+          "relayed_by" `A.pair` A.text (T.decodeUtf8Lenient t.relayed),
           "lock_time" `A.pair` A.word32 t.locktime,
           "tx_index" `A.pair` toEncoding t.index,
           "double_spend" `A.pair` A.bool t.doubleSpend,
@@ -2923,12 +2969,19 @@ data BinfoXPubPath = BinfoXPubPath
   }
   deriving (Eq, Show, Generic, NFData)
 
+-- | By the fingerprint of the parent and the path first, as it always
+-- was, and then by the rest of the key, so that only equal values compare
+-- equal.
 instance Ord BinfoXPubPath where
   compare = compare `on` f
     where
       f b =
         ( b.key.parent,
-          b.deriv
+          b.deriv,
+          b.key.depth,
+          b.key.index,
+          b.key.chain,
+          b.key.key.get
         )
 
 instance MarshalJSON (Network, Ctx) BinfoXPubPath where
@@ -2948,7 +3001,7 @@ instance MarshalJSON (Network, Ctx) BinfoXPubPath where
   unmarshalValue (net, ctx) =
     A.withObject "BinfoXPubPath" $ \o -> do
       key <- o .: "m" >>= unmarshalValue (net, ctx)
-      deriv <- fromMaybe "bad xpub path" . parseSoft <$> o .: "path"
+      deriv <- o .: "path" >>= \t -> maybe (fail ("Not a derivation path: " <> t)) return (parseSoft t)
       return BinfoXPubPath {..}
 
 -- | Information about the chain and prices in @\/blockchain\/multiaddr@.
@@ -3183,7 +3236,7 @@ newtype BinfoDate = BinfoDate Word64
 -- @dd\/mm\/yyyy@.
 parseBinfoDate :: Text -> Maybe BinfoDate
 parseBinfoDate t =
-  BinfoDate . round . utcTimeToPOSIXSeconds <$> (p "%d-%m-%Y" <|> p "%d/%m/%Y")
+  (p "%d-%m-%Y" <|> p "%d/%m/%Y") >>= fmap BinfoDate . unixSeconds
   where
     p fmt = parseTimeM False defaultTimeLocale fmt (cs t)
 
@@ -3363,7 +3416,7 @@ toBinfoAddrs onlyAddrs onlyXpubs xpubTxs =
     xpubBals = map (uncurry xpubBal) $ HashMap.toList onlyXpubs
     addrBals =
       let f Balance {..} =
-            let sent = received - balance
+            let sent = received `minus` balance
                 balance = confirmed + unconfirmed
              in BinfoAddrBalance {..}
        in map f $ HashMap.elems onlyAddrs

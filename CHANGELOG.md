@@ -6,6 +6,78 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-11-12
+
+The fixes of a review of the parsers, the types and the client. No parser
+refused an object for having more fields than it reads; what was wrong was
+elsewhere. `test/Haskoin/Store/RobustSpec.hs` holds each by the input that
+showed it.
+
+### Fixed
+- **A peer could make `/peers` fail.** The JSON of `PeerInfo` decoded the
+  user agent as strict UTF-8 and threw on one that is not. The server
+  fills it with the bytes of the peer's version message. Bytes that are
+  not UTF-8 are now written as the replacement character; `relayed_by`
+  of `BinfoTx` the same.
+- **Values that failed with `error` after their parser had answered.**
+  - A health check whose `time` is not a time: the reader used `read`.
+  - An xpub of the Blockchain.info format whose `path` is not a path: the
+    fallback was a text that `error`ed when read as a path.
+- **`apiCall` threw `error`** for an address in the path that the network
+  cannot write, such as a SegWit address on Bitcoin Cash. It answers
+  `UserError`, as it did for one in the query string. `pathEncodes` is new
+  and says whether `queryPath` can be called.
+- **`apiBatch` with a size of zero never returned.** Zero is taken for one.
+- **The client lost what the server said in an error.**
+  - Only the first piece of the body was read, so an error that came in
+    two pieces was "could not decode error". The whole body is read, up
+    to 64 KiB.
+  - An error that the client does not know, from a newer server, is read
+    as `StringError` with its name and message, instead of not at all.
+  - A message that is not text no longer makes the error unreadable.
+  - An answer that is not from the server, such as the page of a proxy,
+    is `StringError` with the status and the start of the body.
+- **`apiEvents` stopped, as if asked to, at a line it could not read**,
+  and the events after it were lost. A newer server that tells of more
+  than blocks and transactions would have stopped every client. Such a
+  line is left out. A line longer than 64 KiB ends the stream with an
+  error, instead of being kept without limit.
+- **Numbers of request parameters wrapped around.** `-1`, a number too
+  large for its type, hexadecimal and spaces were read, the first two as
+  another number: `-1` as the largest. Only decimal digits that fit are
+  read now, in `parseBinfoBlockId`, `parseBinfoTxId`, `parseBinfoFilter`
+  and the `time`, `height`, `heights`, `limit`, `offset` and start
+  parameters.
+- A date before 1970 in `parseBinfoDate`, and a time before 1970 in a
+  health check, were read as a number near 2^64. They are refused.
+- `RawResult`, `RawResultList` and the services of `PeerInfo` took bytes
+  after the value and ignored them. They are refused.
+- An `address` that is neither null nor an address, in an unspent output,
+  an input or an output, was read as no address. It is refused.
+- The binary reader of `DeriveType` took any unknown byte for `normal`. It
+  fails.
+- Differences of unsigned amounts that could wrap now stop at zero:
+  `txDataFee`, the fee of `toTransaction`, and `sent` of an address in
+  `toBinfoAddrs`.
+- `isOK` of `BlockHealth` took the difference of two heights in 32 signed
+  bits.
+- `Ord BinfoXPubPath` compared only the fingerprint of the parent and the
+  path, so two different keys could compare equal while `==` said no.
+- A `BlockRef` with neither form says what it expected, not that
+  `mempool` is missing.
+
+### Changed
+- `apiCall`, `apiBatch` and `apiEvents` answer `Left (StringError …)` when
+  the server cannot be reached or the URL cannot be read. They used to
+  throw the exception of the HTTP client, which a caller that looked only
+  at the `Either` did not expect.
+
+### Not changed
+- `BlockData` writes `weight` only on networks with SegWit and reads a
+  missing one as zero. A weight on Bitcoin Cash is therefore lost on the
+  way; it has no meaning there, and writing it would add a field to the
+  API.
+
 ## [2.0.0] - 2026-11-12
 
 The API speaks JSON only. The binary encoding of the API is gone, from the
