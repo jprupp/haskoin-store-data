@@ -104,6 +104,13 @@ spec = prepareContext $ \ctx -> do
           v -> v
     it "reads what a store wrote before there was a check of Redis" $ do
       A.fromJSON (without "redis" (A.toJSON bare {redis = Just False})) `shouldBe` A.Success bare
+    it "refuses a time that it cannot read, instead of failing when the time is used" $ do
+      let badly = \case
+            A.Object o -> A.Object (KeyMap.insert "time" (A.String "yesterday") o)
+            v -> v
+      (A.fromJSON (badly (A.toJSON bare)) :: A.Result HealthCheck) `shouldSatisfy` \case
+        A.Error _ -> True
+        A.Success _ -> False
     it "is fit to serve without its Redis, and says that it is without" $ do
       isOK bare {redis = Just False} `shouldBe` True
       A.toJSON bare {redis = Just False} `shouldSatisfy` \case

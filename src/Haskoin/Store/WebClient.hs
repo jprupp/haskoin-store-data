@@ -110,7 +110,7 @@ import Haskoin.Store.Data qualified as Store
 import Haskoin.Store.WebCommon
 import Haskoin.Transaction
 import Haskoin.Util
-import Network.HTTP.Client (Request (..), RequestBody (..))
+import Network.HTTP.Client (HttpException (..), Request (..), RequestBody (..))
 import Network.HTTP.Types (StdMethod (..))
 import Network.HTTP.Types.Status
 import Network.Wreq qualified as HTTP
@@ -152,7 +152,9 @@ instance Default ApiConfig where
 -- > apiCall ctx def $ GetAddrsUnspent addrs def {limit = Just 10}
 --
 -- Only @GET@ and @POST@ endpoints are supported. The result is the error
--- that the server answered with, or the response.
+-- that the server answered with, or the response. A request that could
+-- not be made, or got no answer, is an error too ('Store.StringError' with
+-- the reason): no exception of the HTTP client leaves this function.
 apiCall ::
   (ApiResource a b) =>
   Ctx ->
@@ -162,6 +164,8 @@ apiCall ::
 apiCall ctx (ApiConfig net apiHost) res =
   case toOptions net ctx res of
     Left e -> return (Left e)
+    -- as for a parameter of the query string that cannot be written
+    Right _ | not (pathEncodes net ctx res) -> return (Left (Store.UserError "Invalid Param"))
     Right args ->
       let url = apiHost <> net.name <> cs (queryPath net ctx res)
        in case resourceMethod $ asProxy res of
@@ -177,7 +181,8 @@ apiCall ctx (ApiConfig net apiHost) res =
 -- > apiBatch ctx 20 def (GetAddrsTxs addrs def)
 --
 -- The list is split into chunks of the given size, one call is made per chunk,
--- and the results are concatenated. The calls stop at the first error.
+-- and the results are concatenated. The calls stop at the first error. A
+-- size of zero is taken for one.
 apiBatch ::
   (Batchable a b) =>
   Ctx ->
@@ -223,7 +228,7 @@ apiEventsAfter conf = listenEvents conf . Just
 -- | The events of a server, from now or from after one of them.
 listenEvents :: ApiConfig -> Maybe Store.Event -> (Store.Event -> IO Bool) -> IO (Either Store.Except ())
 listenEvents (ApiConfig net apiHost) after handle = do
-  r <- try (try (HTTP.foldGetWith (jsonOpts mempty) step BS.empty url))
+  r <- try (reaching (HTTP.foldGetWith (jsonOpts mempty) step BS.empty url))
   return $ case r of
     Left Stopped -> Right ()
     Right (Left e) -> Left e
@@ -235,14 +240,23 @@ listenEvents (ApiConfig net apiHost) after handle = do
     -- one event a line; a chunk may end in the middle of one
     step pending chunk = go (pending <> chunk)
     go bytes = case BS.elemIndex 10 bytes of
-      Nothing -> return bytes
+      Nothing
+        -- an event is a hundred bytes: this is not a stream of events
+        | BS.length bytes > maxEventLine -> throwIO (Store.StringError "A line of the events is too long")
+        | otherwise -> return bytes
       Just i -> do
         let (line, rest) = (BS.take i bytes, BS.drop (i + 1) bytes)
-        continue <-
-          if BS.all (`BS.elem` " \r\t") line
-            then return True
-            else maybe (return False) handle (A.decodeStrict line)
+        -- A line that is not an event this client knows is left out: a
+        -- newer server may tell of more than blocks and transactions, and
+        -- to stop there would lose the events that follow, without a
+        -- word.
+        continue <- maybe (return True) handle (A.decodeStrict line)
         if continue then go rest else throwIO Stopped
+
+-- | The most bytes of a line of @\/events@ that the client keeps while it
+-- waits for the end of the line.
+maxEventLine :: Int
+maxEventLine = 65536
 
 -- | Thrown inside 'apiEvents' to leave the stream when the caller has
 -- heard enough.
@@ -332,7 +346,7 @@ getJSON ::
   String ->
   IO (Either Store.Except a)
 getJSON net ctx opts url = do
-  r <- try (HTTP.getWith (jsonOpts opts) url)
+  r <- reaching (HTTP.getWith (jsonOpts opts) url)
   return (r >>= readResponse net ctx)
 
 -- | Make a @POST@ request with a body of text and read the JSON response.
@@ -345,8 +359,20 @@ postJSON ::
   Text ->
   IO (Either Store.Except a)
 postJSON net ctx opts url body = do
-  r <- try (HTTP.postWith (jsonOpts opts) url (Raw "text/plain" (RequestBodyBS (Text.encodeUtf8 body))))
+  r <- reaching (HTTP.postWith (jsonOpts opts) url (Raw "text/plain" (RequestBodyBS (Text.encodeUtf8 body))))
   return (r >>= readResponse net ctx)
+
+-- | Make a request, and give the error that the server answered with
+-- ('checkStatus'), or the reason why there was no answer, as a value. A
+-- server that is down, a name that does not resolve and a URL that cannot
+-- be read are faults a caller has to expect, as much as an error of the
+-- server.
+reaching :: IO a -> IO (Either Store.Except a)
+reaching act =
+  (Right <$> act) `catches` [Handler (return . Left), Handler (return . Left . unreached)]
+  where
+    unreached (HttpExceptionRequest _ why) = Store.StringError ("Could not reach the server: " <> show why)
+    unreached (InvalidUrlException url why) = Store.StringError ("Not a URL: " <> url <> ": " <> why)
 
 -- | Read a response from the JSON of its body.
 readResponse :: (ApiResponse a) => Network -> Ctx -> HTTP.Response BSL.ByteString -> Either Store.Except a
@@ -371,16 +397,26 @@ checkStatus req res
   | statusIsSuccessful status = return ()
   | isHealthPath && code == 503 = return () -- Ignore health checks
   | otherwise = do
-      body <- res ^. HTTP.responseBody
+      -- the whole body, which may come in pieces, up to a size no error
+      -- of the server has
+      body <- BS.concat <$> pieces (65536 :: Int)
       throwIO $
         case A.decodeStrict body of
           Just except -> except :: Store.Except
-          Nothing -> Store.StringError "could not decode error"
+          -- not an error of the server: a proxy's page, most likely
+          Nothing ->
+            Store.StringError $
+              "HTTP " <> show code <> ": " <> cs (Text.take 200 (Text.decodeUtf8Lenient body))
   where
     code = res ^. HTTP.responseStatus . HTTP.statusCode
     message = res ^. HTTP.responseStatus . HTTP.statusMessage
     status = mkStatus code message
     isHealthPath = "/health" `Text.isInfixOf` cs (path req)
+    pieces left
+      | left <= 0 = return []
+      | otherwise = do
+          piece <- res ^. HTTP.responseBody
+          if BS.null piece then return [] else (piece :) <$> pieces (left - BS.length piece)
 
 ---------------
 -- Utilities --
@@ -391,4 +427,5 @@ chunksOf :: Natural -> [a] -> [[a]]
 chunksOf n xs
   | null xs = []
   | otherwise =
-      uncurry (:) $ second (chunksOf n) $ splitAt (fromIntegral n) xs
+      -- chunks of nothing would never use the list up
+      uncurry (:) $ second (chunksOf n) $ splitAt (fromIntegral (max 1 n)) xs

@@ -74,6 +74,7 @@ module Haskoin.Store.WebCommon
     noMaybeBox,
     asProxy,
     queryPath,
+    pathEncodes,
     capturePath,
     paramLabel,
     Param (..),
@@ -116,7 +117,6 @@ import Haskoin.Transaction
 import Haskoin.Util (MarshalJSON (..), encodeHex)
 import Network.HTTP.Types (StdMethod (..))
 import Numeric.Natural (Natural)
-import Text.Read (readMaybe)
 
 -------------------
 -- API Resources --
@@ -604,7 +604,18 @@ noMaybeBox _ = []
 asProxy :: a -> Proxy a
 asProxy = const Proxy
 
--- | Path of a request, with its path parameters filled in.
+-- | Whether the path parameters of a request can be written for the
+-- network: an address of another network cannot. 'queryPath' fails with
+-- 'error' when they cannot, so ask this first.
+pathEncodes :: (ApiResource a b) => Network -> Ctx -> a -> Bool
+pathEncodes net ctx a = all ok (fst (queryParams a))
+  where
+    ok (ParamBox p) = case encodeParam net ctx p of
+      Just [_] -> True
+      _ -> False
+
+-- | Path of a request, with its path parameters filled in. Fails with
+-- 'error' for a parameter that the network cannot write ('pathEncodes').
 queryPath :: (ApiResource a b) => Network -> Ctx -> a -> Text
 queryPath net ctx a = f $ encParam <$> fst (queryParams a)
   where
@@ -686,14 +697,30 @@ instance Param StartParam where
         TxHash x <- hexToTxHash s
         return $ StartParamHash x
       parseHeight = do
-        x <- readMaybe $ cs s
+        x <- natural s
         guard $ x <= 1230768000
         return $ StartParamHeight x
       parseUnix = do
-        x <- readMaybe $ cs s
+        x <- bounded s
         guard $ x > 1230768000
         return $ StartParamTime x
   parseParam _net _ctx _ = Nothing
+
+-- | A whole number written in decimal digits and nothing else.
+-- 'Text.Read.readMaybe' also takes hexadecimal and spaces around, and at
+-- a type of fixed width a sign and a number that does not fit, which it
+-- wraps: @-1@ read as the largest number of the type.
+natural :: Text -> Maybe Natural
+natural t
+  | T.null t || T.length t > 40 || T.any (\c -> c < '0' || c > '9') t = Nothing
+  | otherwise = Just (T.foldl' (\acc c -> acc * 10 + fromIntegral (fromEnum c - fromEnum '0')) 0 t)
+
+-- | The same for a type of fixed width: nothing if the number does not fit.
+bounded :: forall a. (Integral a, Bounded a) => Text -> Maybe a
+bounded t = do
+  n <- natural t
+  guard (toInteger n <= toInteger (maxBound :: a))
+  return (fromIntegral n)
 
 -- | Number of results to skip (@offset@).
 newtype OffsetParam = OffsetParam {get :: Natural}
@@ -705,7 +732,7 @@ instance Default OffsetParam where
 instance Param OffsetParam where
   proxyLabel = const "offset"
   encodeParam _net _ctx (OffsetParam o) = Just [cs $ show o]
-  parseParam _net _ctx [s] = OffsetParam <$> readMaybe (cs s)
+  parseParam _net _ctx [s] = OffsetParam <$> natural s
   parseParam _net _ctx _ = Nothing
 
 -- | Maximum number of results (@limit@).
@@ -715,7 +742,7 @@ newtype LimitParam = LimitParam {get :: Natural}
 instance Param LimitParam where
   proxyLabel = const "limit"
   encodeParam _net _ctx (LimitParam l) = Just [cs $ show l]
-  parseParam _net _ctx [s] = LimitParam <$> readMaybe (cs s)
+  parseParam _net _ctx [s] = LimitParam <$> natural s
   parseParam _net _ctx _ = Nothing
 
 -- | Pagination of a list of results.
@@ -740,7 +767,7 @@ newtype HeightParam = HeightParam {get :: Natural}
 instance Param HeightParam where
   proxyLabel = const "height"
   encodeParam _net _ctx (HeightParam h) = Just [cs $ show h]
-  parseParam _net _ctx [s] = HeightParam <$> readMaybe (cs s)
+  parseParam _net _ctx [s] = HeightParam <$> natural s
   parseParam _net _ctx _ = Nothing
 
 -- | List of block heights (@heights@).
@@ -750,7 +777,7 @@ newtype HeightsParam = HeightsParam {get :: [Natural]}
 instance Param HeightsParam where
   proxyLabel = const "heights"
   encodeParam _net _ctx (HeightsParam hs) = Just $ cs . show <$> hs
-  parseParam _net _ctx xs = HeightsParam <$> mapM (readMaybe . cs) xs
+  parseParam _net _ctx xs = HeightsParam <$> mapM natural xs
 
 -- | Unix timestamp in seconds (@time@).
 newtype TimeParam = TimeParam {get :: Store.UnixTime}
@@ -759,7 +786,7 @@ newtype TimeParam = TimeParam {get :: Store.UnixTime}
 instance Param TimeParam where
   proxyLabel = const "time"
   encodeParam _net _ctx (TimeParam t) = Just [cs $ show t]
-  parseParam _net _ctx [s] = TimeParam <$> readMaybe (cs s)
+  parseParam _net _ctx [s] = TimeParam <$> bounded s
   parseParam _net _ctx _ = Nothing
 
 instance Param XPubKey where
