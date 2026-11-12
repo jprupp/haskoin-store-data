@@ -244,9 +244,6 @@ instance (Arbitrary a) => Arbitrary (RawResult a) where
 instance (Arbitrary a) => Arbitrary (RawResultList a) where
   arbitrary = RawResultList <$> arbitrary
 
-instance Arbitrary EventStream where
-  arbitrary = EventStream <$> arbitrary
-
 arbitraryXPubBal :: Network -> Gen XPubBal
 arbitraryXPubBal net = XPubBal <$> arbitrary <*> arbitraryBalance net
 

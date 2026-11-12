@@ -9,8 +9,8 @@
 -- Client for the REST API of Haskoin Store.
 --
 -- Build a request value, such as 'GetAddrBalance', and pass it to 'apiCall'.
--- The response type follows from the request type. Requests and responses use
--- the compact binary encoding of the API. A call returns the error that the
+-- The response type follows from the request type. Responses are read from
+-- the JSON of the API ('ApiResponse'). A call returns the error that the
 -- server answered with, as 'Store.Except', or the response.
 --
 -- @
@@ -22,8 +22,6 @@
 --
 -- Requests that take long lists of addresses, transactions or blocks can be
 -- split into several calls with 'apiBatch'.
--- The client always uses the binary encoding, which is smaller and faster than
--- JSON and decodes straight into the types of "Haskoin.Store.Data".
 module Haskoin.Store.WebClient
   ( -- * Calls
     ApiConfig (..),
@@ -96,15 +94,15 @@ import Control.Arrow (second)
 import Control.Exception
 import Control.Lens ((.~), (?~), (^.))
 import Data.Aeson qualified as A
+import Data.Aeson.Types qualified as A
 import Data.ByteString qualified as BS
-import Data.Bytes.Get
-import Data.Bytes.Put
-import Data.Bytes.Serial
+import Data.ByteString.Lazy qualified as BSL
 import Data.Default (Default, def)
 import Data.Monoid (Endo (..), appEndo)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as Text
 import Haskoin.Block (blockHashToHex)
 import Haskoin.Crypto (Ctx)
 import Haskoin.Network
@@ -112,11 +110,11 @@ import Haskoin.Store.Data qualified as Store
 import Haskoin.Store.WebCommon
 import Haskoin.Transaction
 import Haskoin.Util
-import Network.HTTP.Client (Request (..))
+import Network.HTTP.Client (Request (..), RequestBody (..))
 import Network.HTTP.Types (StdMethod (..))
 import Network.HTTP.Types.Status
 import Network.Wreq qualified as HTTP
-import Network.Wreq.Types (ResponseChecker)
+import Network.Wreq.Types (Payload (..), ResponseChecker)
 import Numeric.Natural (Natural)
 
 -- | Configuration specifying the Network and the Host for API calls.
@@ -167,10 +165,10 @@ apiCall ctx (ApiConfig net apiHost) res =
     Right args ->
       let url = apiHost <> net.name <> cs (queryPath net ctx res)
        in case resourceMethod $ asProxy res of
-            GET -> getBinary args url
+            GET -> getJSON net ctx args url
             POST ->
               case resourceBody res of
-                Just (PostBox val) -> postBinary args url val
+                Just (PostBox body) -> postJSON net ctx args url body
                 _ -> return . Left $ Store.StringError "Could not post resource"
             _ -> return . Left $ Store.StringError "Unsupported HTTP method"
 
@@ -225,7 +223,7 @@ apiEventsAfter conf = listenEvents conf . Just
 -- | The events of a server, from now or from after one of them.
 listenEvents :: ApiConfig -> Maybe Store.Event -> (Store.Event -> IO Bool) -> IO (Either Store.Except ())
 listenEvents (ApiConfig net apiHost) after handle = do
-  r <- try (try (HTTP.foldGetWith (binaryOpts mempty) step BS.empty url))
+  r <- try (try (HTTP.foldGetWith (jsonOpts mempty) step BS.empty url))
   return $ case r of
     Left Stopped -> Right ()
     Right (Left e) -> Left e
@@ -234,15 +232,17 @@ listenEvents (ApiConfig net apiHost) after handle = do
     url = apiHost <> net.name <> "/events" <> maybe "" (("?after=" <>) . cs . name) after
     name (Store.EventBlock h) = blockHashToHex h
     name (Store.EventTx h) = txHashToHex h
-    -- an event is a byte that says what it is and a hash
-    size = 33
+    -- one event a line; a chunk may end in the middle of one
     step pending chunk = go (pending <> chunk)
-    go bytes
-      | BS.length bytes < size = return bytes
-      | otherwise = do
-          let (one, rest) = BS.splitAt size bytes
-          continue <- either (\_ -> return False) handle (runGetS deserialize one)
-          if continue then go rest else throwIO Stopped
+    go bytes = case BS.elemIndex 10 bytes of
+      Nothing -> return bytes
+      Just i -> do
+        let (line, rest) = (BS.take i bytes, BS.drop (i + 1) bytes)
+        continue <-
+          if BS.all (`BS.elem` " \r\t") line
+            then return True
+            else maybe (return False) handle (A.decodeStrict line)
+        if continue then go rest else throwIO Stopped
 
 -- | Thrown inside 'apiEvents' to leave the stream when the caller has
 -- heard enough.
@@ -323,46 +323,49 @@ toOption net ctx a = do
 applyOpt :: Text -> [Text] -> Endo HTTP.Options
 applyOpt p t = Endo $ HTTP.param p .~ [Text.intercalate "," t]
 
--- | Make a @GET@ request and decode the binary response.
-getBinary ::
-  (Serial a) =>
+-- | Make a @GET@ request and read the JSON response.
+getJSON ::
+  (ApiResponse a) =>
+  Network ->
+  Ctx ->
   Endo HTTP.Options ->
   String ->
   IO (Either Store.Except a)
-getBinary opts url = do
-  resE <- try $ HTTP.getWith (binaryOpts opts) url
-  return $ do
-    res <- resE
-    return . runGetL deserialize $ res ^. HTTP.responseBody
+getJSON net ctx opts url = do
+  r <- try (HTTP.getWith (jsonOpts opts) url)
+  return (r >>= readResponse net ctx)
 
--- | Make a @POST@ request with a binary body and decode the binary response.
-postBinary ::
-  (Serial a, Serial r) =>
+-- | Make a @POST@ request with a body of text and read the JSON response.
+postJSON ::
+  (ApiResponse a) =>
+  Network ->
+  Ctx ->
   Endo HTTP.Options ->
   String ->
-  a ->
-  IO (Either Store.Except r)
-postBinary opts url body = do
-  resE <- try $ HTTP.postWith (binaryOpts opts) url (runPutL (serialize body))
-  return $ do
-    res <- resE
-    return . runGetL deserialize $ res ^. HTTP.responseBody
+  Text ->
+  IO (Either Store.Except a)
+postJSON net ctx opts url body = do
+  r <- try (HTTP.postWith (jsonOpts opts) url (Raw "text/plain" (RequestBodyBS (Text.encodeUtf8 body))))
+  return (r >>= readResponse net ctx)
 
--- | Request binary responses, and turn error responses into exceptions.
-binaryOpts :: Endo HTTP.Options -> HTTP.Options
-binaryOpts opts =
+-- | Read a response from the JSON of its body.
+readResponse :: (ApiResponse a) => Network -> Ctx -> HTTP.Response BSL.ByteString -> Either Store.Except a
+readResponse net ctx res =
+  case A.eitherDecode (res ^. HTTP.responseBody) >>= A.parseEither (parseResponse net ctx) of
+    Left e -> Left (Store.StringError ("Could not read the response: " <> e))
+    Right a -> Right a
+
+-- | Ask for JSON, and turn error responses into exceptions.
+jsonOpts :: Endo HTTP.Options -> HTTP.Options
+jsonOpts opts =
   appEndo (opts <> accept <> stat) HTTP.defaults
   where
-    accept = Endo $ HTTP.header "Accept" .~ ["application/octet-stream"]
+    accept = Endo $ HTTP.header "Accept" .~ ["application/json"]
     stat = Endo $ HTTP.checkResponse ?~ checkStatus
 
 -- | Throw the error in the body of an unsuccessful response as 'Store.Except'.
 -- A health check that answers 503 is not an error: its body says what is
 -- wrong.
---
--- The error is decoded as its @Content-Type@ says: binary from a server
--- that answers a binary request with a binary error, and JSON from one of
--- before version 1.10 of this package, which sent every error as JSON.
 checkStatus :: ResponseChecker
 checkStatus req res
   | statusIsSuccessful status = return ()
@@ -370,14 +373,10 @@ checkStatus req res
   | otherwise = do
       body <- res ^. HTTP.responseBody
       throwIO $
-        case decoded body of
+        case A.decodeStrict body of
           Just except -> except :: Store.Except
           Nothing -> Store.StringError "could not decode error"
   where
-    binary = "application/octet-stream" `BS.isPrefixOf` (res ^. HTTP.responseHeader "Content-Type")
-    decoded body
-      | binary = either (const Nothing) Just (runGetS deserialize body)
-      | otherwise = A.decodeStrict body
     code = res ^. HTTP.responseStatus . HTTP.statusCode
     message = res ^. HTTP.responseStatus . HTTP.statusMessage
     status = mkStatus code message

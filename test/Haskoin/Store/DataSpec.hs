@@ -13,7 +13,6 @@ import Data.Bytes.Serial (Serial, serialize)
 import Data.HashMap.Strict qualified as HashMap
 import Data.IntMap qualified as IntMap
 import Data.Maybe (fromJust)
-import Data.Serialize qualified as S
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import Haskoin
@@ -22,39 +21,26 @@ import Haskoin.Store.Gen
 import Haskoin.Store.Laws
 import Haskoin.Util.Arbitrary
 import Test.Hspec
-import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck
 
 spec :: Spec
 spec = prepareContext $ \ctx -> do
+  -- only the types that the server keeps in its database and caches have
+  -- a binary encoding: the API speaks JSON
   describe "Binary encoding" $ do
     binaryLaws (arbitrary :: Gen BlockRef)
     binaryLaws (arbitrary :: Gen TxRef)
     binaryLaws (arbitrary :: Gen BlockData)
     binaryLaws (arbitrary :: Gen Spender)
     binaryLaws (arbitrary :: Gen Prev)
-    binaryLaws (arbitrary :: Gen Except)
-    binaryLaws (arbitrary :: Gen EventStream)
     binaryLaws (arbitraryTxData ctx)
-    binaryLaws (arbitrary :: Gen XPubSummary)
-    binaryLaws (arbitrary :: Gen HealthCheck)
-    binaryLaws (arbitrary :: Gen Event)
-    binaryLaws (arbitrary :: Gen TxId)
-    binaryLaws (arbitrary :: Gen PeerInfo)
-    binaryLaws (arbitrary :: Gen (GenericResult BlockData))
-    binaryLaws (arbitrary :: Gen (RawResult BlockData))
-    binaryLaws (arbitrary :: Gen (RawResultList BlockData))
     -- also covered inside the types below, but each has its own cereal and
     -- binary instances
     binaryLaws (anyNet arbitraryBalance)
     binaryLaws (anyNet arbitraryUnspent)
-    binaryLaws (anyNet arbitraryStoreInput)
-    binaryLaws (anyNet arbitraryStoreOutput)
     binaryLaws (anyNet arbitraryDeriveType)
     binaryLaws (anyNet (`arbitraryXPubSpec` ctx))
     binaryLaws (anyNet arbitraryXPubBal)
-    binaryLaws (anyNet arbitraryXPubUnspent)
-    binaryLaws (anyNet arbitraryTransaction)
 
   describe "JSON" $ do
     jsonLaws (arbitrary :: Gen TxRef)
@@ -81,11 +67,6 @@ spec = prepareContext $ \ctx -> do
     jsonLaws (arbitrary :: Gen BinfoHistory)
     jsonLaws (arbitrary :: Gen BinfoHeader)
     jsonLaws (arbitrary :: Gen BinfoBlockInfos)
-
-  describe "binary of a network" $
-    prop "EventCommand" . forAll (elements allNets) $ \net ->
-      forAll (arbitraryEventCommand net ctx) $ \x ->
-        unmarshal (net, ctx) (marshal (net, ctx) x) === Right x
 
   -- Balance, Unspent, StoreInput, StoreOutput and the inputs and outputs of
   -- BinfoTx are encoded through their own instances inside these.
@@ -122,9 +103,6 @@ spec = prepareContext $ \ctx -> do
           A.Object o -> A.Object (KeyMap.delete key o)
           v -> v
     it "reads what a store wrote before there was a check of Redis" $ do
-      -- the check of Redis is the last byte, and its key in JSON
-      let old = B.init (runPutS (serialize bare {redis = Just True}))
-      S.decode old `shouldBe` Right bare
       A.fromJSON (without "redis" (A.toJSON bare {redis = Just False})) `shouldBe` A.Success bare
     it "is fit to serve without its Redis, and says that it is without" $ do
       isOK bare {redis = Just False} `shouldBe` True

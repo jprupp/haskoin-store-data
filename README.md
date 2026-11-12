@@ -11,10 +11,11 @@ database or network node of its own, so it is small to depend on.
 - `Haskoin.Store.Data`: the types that the server answers with (blocks,
   transactions, balances, unspent outputs, extended public keys, health
   checks, events, and the Blockchain.info compatible formats), with their
-  JSON and binary encodings.
+  JSON. The types that the server keeps in its database also have a binary
+  encoding, for the server's own use.
 - `Haskoin.Store.WebCommon`: the requests of the API, one type per endpoint,
   with their paths and parameters.
-- `Haskoin.Store.WebClient`: `apiCall`, which sends a request and decodes
+- `Haskoin.Store.WebClient`: `apiCall`, which sends a request and reads
   the answer, and `apiEvents`, which listens to the events of a server.
 
 ## Example
@@ -33,13 +34,9 @@ main = withContext $ \ctx -> do
 ```
 
 The client appends the name of the network to the host, as in the layout of
-api.haskoin.com. The binary encoding is used on the wire, as it is smaller and
-faster to decode than JSON.
+api.haskoin.com. The API speaks JSON, and so does the client.
 
-Errors come back as `Left` an `Except`. From version 1.10 they have a binary
-encoding too, so a server can answer a binary request with a binary error.
-The client reads the `Content-Type` of an error to tell which it got, and so
-works with servers of either kind.
+Errors come back as `Left` an `Except`.
 
 ## Events
 
@@ -52,9 +49,8 @@ answers `ThingNotFound`, and the client reads what it follows again.
 Over the WebSocket at `/events` a client can also choose the transactions
 it hears about. `EventCommand` is what it sends: addresses to watch,
 extended public keys (one command for each type of address), or a Bloom
-filter as in BIP 37. It has a binary encoding and a JSON one, for binary
-and text frames. This package has no WebSocket client of its own; send the
-encoded command with the one you use:
+filter as in BIP 37, each a JSON object sent in a text frame. This package
+has no WebSocket client of its own; send the command with the one you use:
 
 ```haskell
 import Haskoin (marshalJSON)
@@ -68,12 +64,10 @@ Blocks are always told. A connection that has sent no command hears of
 every transaction, unless its URL says what to watch, or `quiet=true` for
 blocks alone.
 
-The bytes of every type, for someone who writes a client in another
-language, are in the "Binary format" section of
+The JSON of every type, for someone who writes a client in another
+language, is in
 [`swagger.yaml`](https://github.com/jprupp/haskoin-store/blob/master/swagger.yaml)
-in the haskoin-store repository. In short: integers are big-endian, a list
-is its length as 64 bits and then its items, and the events of `/events`
-are the one thing sent without a length.
+in the haskoin-store repository.
 
 ## Building
 
@@ -86,16 +80,17 @@ stack build
 stack test
 ```
 
-The tests check every type by law: binary encodings round-trip and agree
-between Serial, cereal and binary, JSON round-trips, the fast encoders write
-the same JSON as `toJSON`, and the wire format of the basic types is pinned.
+The tests check every type by law: JSON round-trips, the fast encoders
+write the same JSON as `toJSON`, the client reads what the server writes,
+the binary encodings of the database round-trip and agree between Serial,
+cereal and binary, and the format of the basic types is pinned.
 
 ## Versions
 
 Up to 1.8.1, this package was released from the
 [haskoin-store](https://github.com/jprupp/haskoin-store) repository with the
 same version number as the server. It now has its own releases; a server
-speaks the wire format of the haskoin-store-data version it depends on.
+speaks the format of the haskoin-store-data version it depends on.
 
 ## License
 
