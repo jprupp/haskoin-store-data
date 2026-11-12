@@ -14,9 +14,9 @@
 --
 -- Most types have three encodings:
 --
--- * binary ('Serial' and 'Binary'/'Serialize' instances), used in the database
---   and in binary API responses;
--- * JSON ('ToJSON' and 'FromJSON' instances), used in JSON API responses;
+-- * binary ('Serial' and 'Binary'/'Serialize' instances), for the types that
+--   the server keeps in its database and its caches, and only for those;
+-- * JSON ('ToJSON' and 'FromJSON' instances), the encoding of the API;
 -- * for types that contain addresses, JSON functions that take the 'Network'
 --   (the @marshal@ functions of 'MarshalJSON'), since the text form of an
 --   address depends on the network.
@@ -78,7 +78,6 @@ module Haskoin.Store.Data
     SerialList (..),
     RawResult (..),
     RawResultList (..),
-    EventStream (..),
     PeerInfo (..),
     Healthy (..),
     BlockHealth (..),
@@ -138,7 +137,7 @@ where
 import Control.Applicative (optional, (<|>))
 import Control.DeepSeq (NFData)
 import Control.Exception (Exception)
-import Control.Monad (guard, join, mzero, unless, when)
+import Control.Monad (guard, join, mzero, when)
 import Data.Aeson
   ( FromJSON (..),
     ToJSON (..),
@@ -815,50 +814,6 @@ data StoreInput
       }
   deriving (Show, Read, Eq, Ord, Generic, Hashable, NFData)
 
-instance Serial StoreInput where
-  serialize StoreCoinbase {..} = do
-    putWord8 0x00
-    serialize outpoint
-    putWord32be sequence
-    putLengthBytes script
-    putList putLengthBytes witness
-  serialize StoreInput {..} = do
-    putWord8 0x01
-    serialize outpoint
-    putWord32be sequence
-    putLengthBytes script
-    putLengthBytes pkscript
-    putWord64be value
-    putList putLengthBytes witness
-    putMaybe serialize address
-
-  deserialize =
-    getWord8 >>= \case
-      0x00 -> do
-        outpoint <- deserialize
-        sequence <- getWord32be
-        script <- getLengthBytes
-        witness <- getList getLengthBytes
-        return StoreCoinbase {..}
-      0x01 -> do
-        outpoint <- deserialize
-        sequence <- getWord32be
-        script <- getLengthBytes
-        pkscript <- getLengthBytes
-        value <- getWord64be
-        witness <- getList getLengthBytes
-        address <- getMaybe deserialize
-        return StoreInput {..}
-      x -> fail $ "Unknown input id: " <> cs (show x)
-
-instance Serialize StoreInput where
-  put = serialize
-  get = deserialize
-
-instance Binary StoreInput where
-  put = serialize
-  get = deserialize
-
 -- | Whether a transaction is a coinbase: it has one input, which spends the null outpoint.
 isCoinbaseTx :: Tx -> Bool
 isCoinbaseTx = all ((== nullOutPoint) . (.outpoint)) . (.inputs)
@@ -998,27 +953,6 @@ data StoreOutput = StoreOutput
     address :: !(Maybe Address)
   }
   deriving (Show, Read, Eq, Ord, Generic, Hashable, NFData)
-
-instance Serial StoreOutput where
-  serialize o = do
-    putWord64be o.value
-    putLengthBytes o.script
-    putMaybe serialize o.spender
-    putMaybe serialize o.address
-  deserialize = do
-    value <- getWord64be
-    script <- getLengthBytes
-    spender <- getMaybe deserialize
-    address <- getMaybe deserialize
-    return StoreOutput {..}
-
-instance Serialize StoreOutput where
-  put = serialize
-  get = deserialize
-
-instance Binary StoreOutput where
-  put = serialize
-  get = deserialize
 
 instance MarshalJSON Network StoreOutput where
   marshalValue net o =
@@ -1258,43 +1192,6 @@ data Transaction = Transaction
   }
   deriving (Show, Eq, Ord, Generic, Hashable, NFData)
 
-instance Serial Transaction where
-  serialize t = do
-    serialize t.block
-    putWord32be t.version
-    putWord32be t.locktime
-    putList serialize t.inputs
-    putList serialize t.outputs
-    serialize t.deleted
-    serialize t.rbf
-    putWord64be t.timestamp
-    serialize t.txid
-    putWord32be t.size
-    putWord32be t.weight
-    putWord64be t.fee
-  deserialize = do
-    block <- deserialize
-    version <- getWord32be
-    locktime <- getWord32be
-    inputs <- getList deserialize
-    outputs <- getList deserialize
-    deleted <- deserialize
-    rbf <- deserialize
-    timestamp <- getWord64be
-    txid <- deserialize
-    size <- getWord32be
-    weight <- getWord32be
-    fee <- getWord64be
-    return Transaction {..}
-
-instance Serialize Transaction where
-  put = serialize
-  get = deserialize
-
-instance Binary Transaction where
-  put = serialize
-  get = deserialize
-
 -- | The transaction without the information added by the store.
 transactionData :: Transaction -> Tx
 transactionData t =
@@ -1378,29 +1275,6 @@ data PeerInfo = PeerInfo
     relay :: !Bool
   }
   deriving (Show, Eq, Ord, Generic, NFData)
-
-instance Serial PeerInfo where
-  serialize p = do
-    putLengthBytes p.userAgent
-    putLengthBytes $ T.encodeUtf8 $ T.pack p.address
-    putInt32be p.version
-    putWord64be p.services
-    serialize p.relay
-  deserialize = do
-    userAgent <- getLengthBytes
-    address <- T.unpack . T.decodeUtf8 <$> getLengthBytes
-    version <- getInt32be
-    services <- getWord64be
-    relay <- deserialize
-    return PeerInfo {..}
-
-instance Serialize PeerInfo where
-  put = serialize
-  get = deserialize
-
-instance Binary PeerInfo where
-  put = serialize
-  get = deserialize
 
 instance ToJSON PeerInfo where
   toJSON p =
@@ -1493,23 +1367,6 @@ data XPubUnspent = XPubUnspent
   }
   deriving (Show, Eq, Ord, Generic, NFData)
 
-instance Serial XPubUnspent where
-  serialize u = do
-    putList putWord32be u.path
-    serialize u.unspent
-  deserialize = do
-    path <- getList getWord32be
-    unspent <- deserialize
-    return XPubUnspent {..}
-
-instance Serialize XPubUnspent where
-  put = serialize
-  get = deserialize
-
-instance Binary XPubUnspent where
-  put = serialize
-  get = deserialize
-
 instance MarshalJSON Network XPubUnspent where
   marshalValue net u =
     A.object
@@ -1546,31 +1403,6 @@ data XPubSummary = XPubSummary
     change :: !Word32
   }
   deriving (Eq, Show, Generic, NFData)
-
-instance Serial XPubSummary where
-  serialize s = do
-    putWord64be s.confirmed
-    putWord64be s.unconfirmed
-    putWord64be s.received
-    putWord64be s.utxo
-    putWord32be s.external
-    putWord32be s.change
-  deserialize = do
-    confirmed <- getWord64be
-    unconfirmed <- getWord64be
-    received <- getWord64be
-    utxo <- getWord64be
-    external <- getWord32be
-    change <- getWord32be
-    return XPubSummary {..}
-
-instance Binary XPubSummary where
-  put = serialize
-  get = deserialize
-
-instance Serialize XPubSummary where
-  put = serialize
-  get = deserialize
 
 instance ToJSON XPubSummary where
   toJSON s =
@@ -1636,29 +1468,6 @@ data BlockHealth = BlockHealth
   }
   deriving (Show, Eq, Generic, NFData)
 
-instance Serial BlockHealth where
-  serialize h = do
-    serialize (isOK h)
-    putWord32be h.headers
-    putWord32be h.blocks
-    putInt32be h.max
-  deserialize = do
-    k <- deserialize
-    headers <- getWord32be
-    blocks <- getWord32be
-    max <- getInt32be
-    let h = BlockHealth {..}
-    unless (k == isOK h) $ fail "Inconsistent health check"
-    return h
-
-instance Serialize BlockHealth where
-  put = serialize
-  get = deserialize
-
-instance Binary BlockHealth where
-  put = serialize
-  get = deserialize
-
 instance Healthy BlockHealth where
   isOK x =
     h - b <= x.max
@@ -1695,27 +1504,6 @@ data TimeHealth = TimeHealth
   }
   deriving (Show, Eq, Generic, NFData)
 
-instance Serial TimeHealth where
-  serialize h = do
-    serialize (isOK h)
-    putInt64be h.age
-    putInt64be h.max
-  deserialize = do
-    k <- deserialize
-    age <- getInt64be
-    max <- getInt64be
-    let t = TimeHealth {..}
-    unless (k == isOK t) $ fail "Inconsistent health check"
-    return t
-
-instance Binary TimeHealth where
-  put = serialize
-  get = deserialize
-
-instance Serialize TimeHealth where
-  put = serialize
-  get = deserialize
-
 instance Healthy TimeHealth where
   isOK TimeHealth {..} =
     age <= max
@@ -1744,27 +1532,6 @@ data CountHealth = CountHealth
   }
   deriving (Show, Eq, Generic, NFData)
 
-instance Serial CountHealth where
-  serialize h = do
-    serialize (isOK h)
-    putInt64be h.count
-    putInt64be h.min
-  deserialize = do
-    k <- deserialize
-    count <- getInt64be
-    min <- getInt64be
-    let c = CountHealth {..}
-    unless (k == isOK c) $ fail "Inconsistent health check"
-    return c
-
-instance Serialize CountHealth where
-  put = serialize
-  get = deserialize
-
-instance Binary CountHealth where
-  put = serialize
-  get = deserialize
-
 instance Healthy CountHealth where
   isOK CountHealth {..} = min <= count
 
@@ -1791,27 +1558,6 @@ data MaxHealth = MaxHealth
     max :: !Int64
   }
   deriving (Show, Eq, Generic, NFData)
-
-instance Serial MaxHealth where
-  serialize h = do
-    serialize $ isOK h
-    putInt64be h.count
-    putInt64be h.max
-  deserialize = do
-    k <- deserialize
-    count <- getInt64be
-    max <- getInt64be
-    let h = MaxHealth {..}
-    unless (k == isOK h) $ fail "Inconsistent health check"
-    return h
-
-instance Binary MaxHealth where
-  put = serialize
-  get = deserialize
-
-instance Serialize MaxHealth where
-  put = serialize
-  get = deserialize
 
 instance Healthy MaxHealth where
   isOK MaxHealth {..} = count <= max
@@ -1841,8 +1587,7 @@ instance FromJSON MaxHealth where
 -- knowing and not worth taking the store out of service for, so it has a
 -- field of its own, and @\/health@ answers 203 instead of 200.
 --
--- The field is the last thing in the binary encoding, and may be missing
--- there and in JSON, where it reads as 'Nothing'. So the output of a store
+-- The field may be missing in the JSON, where it reads as 'Nothing'. So the output of a store
 -- from before the field can still be read, and a client from before it
 -- reads the output of a new store.
 data HealthCheck = HealthCheck
@@ -1867,52 +1612,6 @@ data HealthCheck = HealthCheck
     redis :: !(Maybe Bool)
   }
   deriving (Show, Eq, Generic, NFData)
-
-instance Serial HealthCheck where
-  serialize h = do
-    serialize $ isOK h
-    serialize h.blocks
-    serialize h.lastBlock
-    serialize h.lastTx
-    serialize h.pendingTxs
-    serialize h.peers
-    putLengthBytes $ T.encodeUtf8 $ T.pack h.network
-    putLengthBytes $ T.encodeUtf8 $ T.pack h.version
-    putWord64be h.time
-    putWord8 $ case h.redis of
-      Nothing -> 0x00
-      Just False -> 0x01
-      Just True -> 0x02
-  deserialize = do
-    k <- deserialize
-    blocks <- deserialize
-    lastBlock <- deserialize
-    lastTx <- deserialize
-    pendingTxs <- deserialize
-    peers <- deserialize
-    network <- T.unpack . T.decodeUtf8 <$> getLengthBytes
-    version <- T.unpack . T.decodeUtf8 <$> getLengthBytes
-    time <- getWord64be
-    redis <-
-      isEmpty >>= \case
-        True -> return Nothing
-        False ->
-          getWord8 >>= \case
-            0x00 -> return Nothing
-            0x01 -> return (Just False)
-            0x02 -> return (Just True)
-            _ -> fail "Cannot decode the health of Redis"
-    let h = HealthCheck {..}
-    unless (k == isOK h) $ fail "Inconsistent health check"
-    return h
-
-instance Binary HealthCheck where
-  put = serialize
-  get = deserialize
-
-instance Serialize HealthCheck where
-  put = serialize
-  get = deserialize
 
 instance Healthy HealthCheck where
   isOK h =
@@ -1962,23 +1661,6 @@ data Event
     EventTx !TxHash
   deriving (Show, Eq, Generic, NFData)
 
-instance Serial Event where
-  serialize (EventBlock bh) = putWord8 0x00 >> serialize bh
-  serialize (EventTx th) = putWord8 0x01 >> serialize th
-  deserialize =
-    getWord8 >>= \case
-      0x00 -> EventBlock <$> deserialize
-      0x01 -> EventTx <$> deserialize
-      _ -> fail "Not an Event"
-
-instance Serialize Event where
-  put = serialize
-  get = deserialize
-
-instance Binary Event where
-  put = serialize
-  get = deserialize
-
 instance ToJSON Event where
   toJSON (EventTx h) =
     A.object ["type" .= String "tx", "id" .= h]
@@ -2026,86 +1708,40 @@ instance FromJSON Event where
 -- server cannot accept ends the connection, with the reason in the close
 -- frame.
 --
--- In binary a command is one byte, the number given with each below, and
--- then what it carries ('Marshal'). In JSON it is an object with a @type@
--- ('MarshalJSON'). A key is watched under one type of address; a wallet
+-- A command is a JSON object with a @type@ ('MarshalJSON'). A key is watched under one type of address; a wallet
 -- that uses several sends a command for each.
 data EventCommand
-  = -- | @0x00@, @{"type":"watch","addresses":[...]}@: watch these
-    -- addresses as well; a counted list in binary
+  = -- | @{"type":"watch","addresses":[...]}@: watch these addresses as
+    -- well
     EventWatch ![Address]
-  | -- | @0x01@, @{"type":"unwatch","addresses":[...]}@: stop watching
+  | -- | @{"type":"unwatch","addresses":[...]}@: stop watching
     -- these addresses
     EventUnwatch ![Address]
-  | -- | @0x02@, @{"type":"watch","xpub":"...","derive":"segwit"}@: watch
-    -- the addresses of this key as well, those in use and the gap after
-    -- them, which moves on as they get used; @derive@ may be left out for
-    -- legacy addresses; in binary the 78 bytes of the key as in BIP 32 and
-    -- a byte for the type, @00@ legacy, @01@ compat, @02@ segwit
+  | -- | @{"type":"watch","xpub":"...","derive":"segwit"}@: watch the
+    -- addresses of this key as well, those in use and the gap after them,
+    -- which moves on as they get used; @derive@ may be left out for legacy
+    -- addresses
     EventWatchXPub !XPubSpec
-  | -- | @0x03@, @{"type":"unwatch","xpub":"...","derive":"segwit"}@: stop
+  | -- | @{"type":"unwatch","xpub":"...","derive":"segwit"}@: stop
     -- watching this key
     EventUnwatchXPub !XPubSpec
-  | -- | @0x04@,
-    -- @{"type":"filterload","filter":"hex","functions":n,"tweak":n,"flags":n}@:
-    -- set the Bloom filter of the connection, in place of the one it had;
-    -- in binary it is laid out as in the @filterload@ message of the
-    -- Bitcoin protocol
+  | -- | @{"type":"filterload","filter":"hex","functions":n,"tweak":n,"flags":n}@:
+    -- set the Bloom filter of the connection, in place of the one it had
     EventFilterLoad !BloomFilter
-  | -- | @0x05@, @{"type":"filteradd","data":"hex"}@: add an element of at
-    -- most 'maxFilterAddSize' bytes to the filter; bytes with their
-    -- length in binary
+  | -- | @{"type":"filteradd","data":"hex"}@: add an element of at most
+    -- 'maxFilterAddSize' bytes to the filter
     EventFilterAdd !ByteString
-  | -- | @0x06@, @{"type":"filterclear"}@: remove the filter; the addresses
+  | -- | @{"type":"filterclear"}@: remove the filter; the addresses
     -- and keys stay watched
     EventFilterClear
-  | -- | @0x07@, @{"type":"all"}@: forget everything watched and the filter,
+  | -- | @{"type":"all"}@: forget everything watched and the filter,
     -- and hear of every transaction again
     EventAll
-  | -- | @0x08@, @{"type":"none"}@: forget everything watched and the filter,
+  | -- | @{"type":"none"}@: forget everything watched and the filter,
     -- and hear of no transaction, only of blocks, until something is
     -- watched
     EventNone
   deriving (Show, Eq, Generic, NFData)
-
--- | The binary form, for binary frames. It takes the network and the
--- context because an extended public key is written as BIP 32 writes it,
--- in the 78 bytes that the Base58Check of its text decodes to, which every
--- wallet library has: the bytes that the database uses for a key are those
--- of one C library, and no client in another language could make them.
-instance Marshal (Network, Ctx) EventCommand where
-  marshalPut s = \case
-    EventWatch as -> putWord8 0x00 >> putList serialize as
-    EventUnwatch as -> putWord8 0x01 >> putList serialize as
-    EventWatchXPub x -> putWord8 0x02 >> marshalPut s x.key >> serialize x.deriv
-    EventUnwatchXPub x -> putWord8 0x03 >> marshalPut s x.key >> serialize x.deriv
-    EventFilterLoad f -> putWord8 0x04 >> serialize f
-    EventFilterAdd d -> putWord8 0x05 >> putLengthBytes d
-    EventFilterClear -> putWord8 0x06
-    EventAll -> putWord8 0x07
-    EventNone -> putWord8 0x08
-  marshalGet s =
-    getWord8 >>= \case
-      0x00 -> EventWatch <$> getList deserialize
-      0x01 -> EventUnwatch <$> getList deserialize
-      0x02 -> EventWatchXPub <$> xpub
-      0x03 -> EventUnwatchXPub <$> xpub
-      0x04 -> EventFilterLoad <$> deserialize
-      0x05 -> EventFilterAdd <$> (filterElement =<< getLengthBytes)
-      0x06 -> return EventFilterClear
-      0x07 -> return EventAll
-      0x08 -> return EventNone
-      _ -> fail "Not an EventCommand"
-    where
-      xpub = do
-        key <- marshalGet s
-        deriv <-
-          getWord8 >>= \case
-            0x00 -> return DeriveNormal
-            0x01 -> return DeriveP2SH
-            0x02 -> return DeriveP2WPKH
-            _ -> fail "Unknown derivation"
-        return XPubSpec {..}
 
 -- | An element for a Bloom filter, refused when longer than a node takes.
 filterElement :: (MonadFail m) => ByteString -> m ByteString
@@ -2182,18 +1818,6 @@ newtype GenericResult a = GenericResult {get :: a}
   deriving stock (Show, Eq, Generic)
   deriving anyclass (NFData)
 
-instance (Serial a) => Serial (GenericResult a) where
-  serialize (GenericResult x) = serialize x
-  deserialize = GenericResult <$> deserialize
-
-instance (Serial a) => Serialize (GenericResult a) where
-  put = serialize
-  get = deserialize
-
-instance (Serial a) => Binary (GenericResult a) where
-  put = serialize
-  get = deserialize
-
 instance (ToJSON a) => ToJSON (GenericResult a) where
   toJSON (GenericResult b) = A.object ["result" .= b]
   toEncoding (GenericResult b) = A.pairs ("result" `A.pair` toEncoding b)
@@ -2207,18 +1831,6 @@ instance (FromJSON a) => FromJSON (GenericResult a) where
 newtype RawResult a = RawResult {get :: a}
   deriving stock (Show, Eq, Generic)
   deriving anyclass (NFData)
-
-instance (Serial a) => Serial (RawResult a) where
-  serialize (RawResult x) = serialize x
-  deserialize = RawResult <$> deserialize
-
-instance (Serial a) => Serialize (RawResult a) where
-  put = serialize
-  get = deserialize
-
-instance (Serial a) => Binary (RawResult a) where
-  put = serialize
-  get = deserialize
 
 instance (Serial a) => ToJSON (RawResult a) where
   toJSON (RawResult b) =
@@ -2235,7 +1847,7 @@ instance (Serial a) => FromJSON (RawResult a) where
               =<< decodeHex res
       maybe mzero (return . RawResult) m
 
--- | List response. In binary, a length followed by the items.
+-- | List response, a JSON array.
 newtype SerialList a = SerialList {get :: [a]}
   deriving stock (Show, Eq, Generic)
   deriving anyclass (NFData)
@@ -2246,10 +1858,6 @@ instance Semigroup (SerialList a) where
 instance Monoid (SerialList a) where
   mempty = SerialList mempty
 
-instance (Serial a) => Serial (SerialList a) where
-  serialize (SerialList ls) = putList serialize ls
-  deserialize = SerialList <$> getList deserialize
-
 instance (ToJSON a) => ToJSON (SerialList a) where
   toJSON (SerialList ls) = toJSON ls
   toEncoding (SerialList ls) = A.list toEncoding ls
@@ -2258,55 +1866,10 @@ instance (FromJSON a) => FromJSON (SerialList a) where
   parseJSON = fmap SerialList . parseJSON
 
 -- | List of values in their peer-to-peer serialization, encoded in JSON as a
--- list of hex strings. In binary it is the number of values and then the
--- values, like every other list of the API. Before version 1.10 it was the
--- values alone, one after the other, which only a reader that knew where
--- the body ended could take apart.
+-- list of hex strings.
 newtype RawResultList a = RawResultList {get :: [a]}
   deriving stock (Show, Eq, Generic)
   deriving anyclass (NFData)
-
-instance (Serial a) => Serial (RawResultList a) where
-  serialize (RawResultList xs) = putList serialize xs
-  deserialize = RawResultList <$> getList deserialize
-
--- | The events of a server as @\/events@ sends them in binary: one after
--- the other, for as long as the connection is open, with no count before
--- them, since there is no telling how many will come. Decoding reads
--- events until the input ends, so it is for a piece of the stream that
--- holds whole events; 'Haskoin.Store.WebClient.apiEvents' reads the stream
--- as it comes.
---
--- The endpoint used to be declared as a t'SerialList' of events, which has
--- a count before it that the server never sent.
-newtype EventStream = EventStream {get :: [Event]}
-  deriving stock (Show, Eq, Generic)
-  deriving anyclass (NFData)
-
-instance Serial EventStream where
-  serialize (EventStream es) = mapM_ serialize es
-  deserialize = EventStream <$> go
-    where
-      go =
-        isEmpty >>= \case
-          True -> return []
-          False -> (:) <$> deserialize <*> go
-
-instance Serialize EventStream where
-  put = serialize
-  get = deserialize
-
-instance Binary EventStream where
-  put = serialize
-  get = deserialize
-
-instance (Serial a) => Serialize (RawResultList a) where
-  put = serialize
-  get = deserialize
-
-instance (Serial a) => Binary (RawResultList a) where
-  put = serialize
-  get = deserialize
 
 instance Semigroup (RawResultList a) where
   (RawResultList a) <> (RawResultList b) = RawResultList $ a <> b
@@ -2336,18 +1899,6 @@ newtype TxId
   = TxId TxHash
   deriving stock (Show, Eq, Generic)
   deriving anyclass (NFData)
-
-instance Serial TxId where
-  serialize (TxId h) = serialize h
-  deserialize = TxId <$> deserialize
-
-instance Serialize TxId where
-  put = serialize
-  get = deserialize
-
-instance Binary TxId where
-  put = serialize
-  get = deserialize
 
 instance ToJSON TxId where
   toJSON (TxId h) = A.object ["txid" .= h]
@@ -2380,50 +1931,6 @@ data Except
   deriving (Show, Eq, Ord, Generic, NFData)
 
 instance Exception Except
-
--- | An error in the binary encoding: one byte that says which, followed by
--- the message of those that have one, as UTF-8 with its length, or by the
--- transactions of a 'TxIndexConflict'.
---
--- Errors used to be JSON whatever the client asked for, because this
--- instance did not exist. A client that asks for binary now gets every
--- answer in binary, and needs no JSON decoder for the one case that it
--- hopes not to meet.
-instance Serial Except where
-  serialize = \case
-    ThingNotFound -> putWord8 0x00
-    ServerError -> putWord8 0x01
-    BadRequest -> putWord8 0x02
-    UserError m -> putWord8 0x03 >> message m
-    StringError m -> putWord8 0x04 >> message m
-    TxIndexConflict ts -> putWord8 0x05 >> putList serialize ts
-    ServerTimeout -> putWord8 0x06
-    RequestTooLarge -> putWord8 0x07
-    BehindFleet -> putWord8 0x08
-    where
-      message = putLengthBytes . T.encodeUtf8 . T.pack
-  deserialize =
-    getWord8 >>= \case
-      0x00 -> return ThingNotFound
-      0x01 -> return ServerError
-      0x02 -> return BadRequest
-      0x03 -> UserError <$> message
-      0x04 -> StringError <$> message
-      0x05 -> TxIndexConflict <$> getList deserialize
-      0x06 -> return ServerTimeout
-      0x07 -> return RequestTooLarge
-      0x08 -> return BehindFleet
-      _ -> fail "Not an error of the API"
-    where
-      message = getLengthBytes >>= either (fail . show) (return . T.unpack) . T.decodeUtf8'
-
-instance Serialize Except where
-  put = serialize
-  get = deserialize
-
-instance Binary Except where
-  put = serialize
-  get = deserialize
 
 instance ToJSON Except where
   toJSON e =

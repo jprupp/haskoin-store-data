@@ -9,8 +9,10 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Word (Word64)
 import Haskoin
-import Haskoin.Store.Data (DeriveType (..))
-import Haskoin.Store.Gen (arbitraryDeriveType)
+import Data.Aeson qualified as A
+import Data.Aeson.Types qualified as A
+import Haskoin.Store.Data (DeriveType (..), SerialList (..), TxRef)
+import Haskoin.Store.Gen (arbitraryDeriveType, arbitraryTransaction)
 import Haskoin.Store.WebCommon
 import Haskoin.Util.Arbitrary
 import Test.Hspec
@@ -35,6 +37,17 @@ spec = prepareContext $ \ctx -> do
     roundTrip ctx (const (NoTx <$> arbitrary))
     roundTrip ctx (const (listOf arbitraryBlockHash))
     roundTrip ctx (const (listOf arbitraryTxHash))
+
+  -- the client reads what the server writes: lists in the JSON of the
+  -- network, and the rest in plain JSON
+  describe "Responses" $ do
+    prop "a list of transactions" . forAll (elements allNets) $ \net ->
+      forAll (listOf (arbitraryTransaction net)) $ \xs ->
+        A.parseEither (parseResponse net ctx) (A.toJSON (map (marshalValue net) xs))
+          === Right (SerialList xs)
+    prop "a list of references" . forAll (listOf arbitrary) $ \xs ->
+      A.parseEither (parseResponse btc ctx) (A.toJSON (xs :: [TxRef]))
+        === Right (SerialList xs)
 
   describe "Start of a page" $ do
     it "is a transaction hash, a height up to 1230768000, or a later time" $ do

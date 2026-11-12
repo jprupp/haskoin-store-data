@@ -23,6 +23,7 @@
 -- are the same ones the client builds requests from.
 module Haskoin.Store.WebCommon
   ( ApiResource (..),
+    ApiResponse (..),
     PostBox (..),
     ParamBox (..),
     ProxyBox (..),
@@ -90,7 +91,11 @@ where
 
 import Control.Applicative ((<|>))
 import Control.Monad (guard)
+import Data.Aeson qualified as A
+import Data.Aeson.Types qualified as A
+import Data.Bytes.Put (runPutS)
 import Data.Bytes.Serial
+import Data.Foldable (toList)
 import Data.Default (Default, def)
 import Data.Proxy (Proxy (..))
 import Data.String.Conversions (cs)
@@ -108,6 +113,7 @@ import Haskoin.Crypto.Keys
 import Haskoin.Network.Data
 import Haskoin.Store.Data qualified as Store
 import Haskoin.Transaction
+import Haskoin.Util (MarshalJSON (..), encodeHex)
 import Network.HTTP.Types (StdMethod (..))
 import Numeric.Natural (Natural)
 import Text.Read (readMaybe)
@@ -117,8 +123,8 @@ import Text.Read (readMaybe)
 -------------------
 
 -- | An endpoint of the API. The request type @a@ determines the response type
--- @b@.
-class (Serial b) => ApiResource a b | a -> b where
+-- @b@, which the client reads from its JSON ('ApiResponse').
+class (ApiResponse b) => ApiResource a b | a -> b where
   -- | HTTP method; 'GET' by default.
   resourceMethod :: Proxy a -> StdMethod
   resourceMethod _ = GET
@@ -141,8 +147,73 @@ class (Serial b) => ApiResource a b | a -> b where
   resourceBody :: a -> Maybe PostBox
   resourceBody = const Nothing
 
--- | Request body of any serializable type.
-data PostBox = forall s. (Serial s) => PostBox !s
+-- | Body of a request, as the text that is sent: a transaction to publish
+-- goes in hex.
+newtype PostBox = PostBox Text
+
+-- | How the client reads a response from its JSON.
+--
+-- The API speaks JSON only. Many responses hold addresses, whose text
+-- depends on the network ('MarshalJSON'), so the reader is given the
+-- network and the context, and a type that needs neither ignores them.
+-- A class of its own, rather than @MarshalJSON (Network, Ctx)@, lets each
+-- response say which of its JSON instances to use, without new instances
+-- on the data types.
+class ApiResponse b where
+  -- | Read a response from its JSON.
+  parseResponse :: Network -> Ctx -> A.Value -> A.Parser b
+
+instance ApiResponse Store.BlockData where
+  parseResponse net _ = unmarshalValue net
+
+instance ApiResponse Store.Transaction where
+  parseResponse net _ = unmarshalValue net
+
+instance ApiResponse Store.Balance where
+  parseResponse net _ = unmarshalValue net
+
+instance ApiResponse Store.Unspent where
+  parseResponse net _ = unmarshalValue net
+
+instance ApiResponse Store.XPubBal where
+  parseResponse net _ = unmarshalValue net
+
+instance ApiResponse Store.XPubUnspent where
+  parseResponse net _ = unmarshalValue net
+
+instance ApiResponse Store.TxRef where
+  parseResponse _ _ = A.parseJSON
+
+instance ApiResponse Store.XPubSummary where
+  parseResponse _ _ = A.parseJSON
+
+instance ApiResponse Store.PeerInfo where
+  parseResponse _ _ = A.parseJSON
+
+instance ApiResponse Store.HealthCheck where
+  parseResponse _ _ = A.parseJSON
+
+instance ApiResponse Store.TxId where
+  parseResponse _ _ = A.parseJSON
+
+instance ApiResponse Store.Event where
+  parseResponse _ _ = A.parseJSON
+
+instance ApiResponse TxHash where
+  parseResponse _ _ = A.parseJSON
+
+instance (A.FromJSON a) => ApiResponse (Store.GenericResult a) where
+  parseResponse _ _ = A.parseJSON
+
+instance (Serial a) => ApiResponse (Store.RawResult a) where
+  parseResponse _ _ = A.parseJSON
+
+instance (Serial a) => ApiResponse (Store.RawResultList a) where
+  parseResponse _ _ = A.parseJSON
+
+instance (ApiResponse a) => ApiResponse (Store.SerialList a) where
+  parseResponse net ctx =
+    A.withArray "list" $ fmap Store.SerialList . mapM (parseResponse net ctx) . toList
 
 -- | Parameter value of any type.
 data ParamBox = forall p. (Eq p, Param p) => ParamBox !p
@@ -387,13 +458,15 @@ instance ApiResource GetTxAfter (Store.GenericResult (Maybe Bool)) where
 instance ApiResource PostTx Store.TxId where
   resourceMethod _ = POST
   resourcePath _ _ = "/transactions"
-  resourceBody (PostTx tx) = Just $ PostBox tx
+  resourceBody (PostTx tx) = Just . PostBox . encodeHex . runPutS $ serialize tx
 
 instance ApiResource GetMempool (Store.SerialList TxHash) where
   resourcePath _ _ = "/mempool"
   queryParams (GetMempool l o) = ([], noMaybeBox l <> noDefBox o)
 
-instance ApiResource GetEvents Store.EventStream where
+-- | The events are lines of JSON with no end: read them with
+-- 'Haskoin.Store.WebClient.apiEvents', not as one response.
+instance ApiResource GetEvents (Store.SerialList Store.Event) where
   resourcePath _ _ = "/events"
 
 -------------

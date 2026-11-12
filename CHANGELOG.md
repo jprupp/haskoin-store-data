@@ -6,6 +6,35 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-12
+
+The API speaks JSON only. The binary encoding of the API is gone, from the
+types, the client and the documentation. Servers from haskoin-store 1.10
+answer in JSON only, and clients of earlier versions, which ask for binary,
+do not work with them.
+
+### Removed
+
+- The binary instances (`Serial`, `Serialize`, `Binary`) of the types that
+  only the API used: `Transaction`, `StoreInput`, `StoreOutput`,
+  `PeerInfo`, `XPubUnspent`, `XPubSummary`, the health checks, `Event`,
+  `Except`, `TxId`, `GenericResult`, `RawResult`, `RawResultList` and
+  `SerialList`. The types that the server keeps in its database and its
+  caches keep theirs.
+- `Marshal (Network, Ctx) EventCommand`: commands over the WebSocket of
+  `/events` are JSON in text frames.
+- `EventStream`. `GetEvents` answers `SerialList Event`; read the events
+  with `apiEvents`, as before.
+
+### Changed
+
+- `apiCall` and `apiBatch` ask for JSON and read it with the new class
+  `ApiResponse`, which every response type has and `ApiResource` now
+  requires in place of `Serial`.
+- `apiEvents` and `apiEventsAfter` read the events as lines of JSON.
+- `PostBox` holds the text of a request body. `PostTx` sends the
+  transaction in hex, as `text/plain`.
+
 ## [1.11.0] - 2026-11-10
 
 ### Added
