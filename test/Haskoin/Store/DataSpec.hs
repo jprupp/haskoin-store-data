@@ -262,6 +262,19 @@ spec = prepareContext $ \ctx -> do
                            fromIntegral (len witless * 3 + len td.tx),
                            ws
                          )
+    it "gives the same with the id given" $
+      forAll (arbitraryTxData ctx) $ \td ->
+        toTransactionWithId btc ctx (txHash td.tx) td `shouldBe` toTransaction btc ctx td
+    it "counts sizes as serializing does, with large counts and pushes" $
+      -- counts and lengths of 253 and more take more than a byte
+      forAll (arbitraryTxData ctx) $ \td -> forAll (choose (0, 3)) $ \k ->
+        let big = B.replicate (0xfc + k * 0x100) 0x51
+            Tx {..} = td.tx
+            grown = case outputs of
+              TxOut v _ : os -> Tx {outputs = TxOut v big : os, ..}
+              [] -> Tx {..}
+            t = toTransaction btc ctx (td {tx = grown} :: TxData)
+         in t.size `shouldBe` fromIntegral (B.length (runPutS (serialize grown)))
     -- an output has an address only where the network has that kind
     forM_
       [ ("a SegWit output an address on Bitcoin", btc, p2wpkh, "\"bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4\""),

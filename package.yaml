@@ -1,5 +1,5 @@
 name: haskoin-store-data
-version: 2.0.1
+version: 2.0.2
 synopsis: Data types and API client of Haskoin Store
 description: |
   The types of the data that Haskoin Store serves (blocks, transactions,
