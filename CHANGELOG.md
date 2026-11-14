@@ -4,7 +4,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)
 
-## [Unreleased]
+## [2.0.2] - 2026-11-14
+
+### Added
+- **`toTransactionWithId`**, `toTransaction` for a transaction whose id is
+  known, as it is for one read by its id. It serializes nothing:
+  serializing and hashing the transaction took a quarter of the time of
+  building its API form.
+
+### Changed
+- `toTransaction` counts the size and the weight from the lengths of the
+  parts of the transaction, instead of serializing it with and without its
+  witness. It still serializes it once without the witness, for its id.
 
 ## [2.0.1] - 2026-11-12
 

@@ -49,6 +49,7 @@ module Haskoin.Store.Data
     transactionData,
     fromTransaction,
     toTransaction,
+    toTransactionWithId,
     StoreInput (..),
     isCoinbase,
     StoreOutput (..),
@@ -1135,9 +1136,20 @@ txDataFee t =
 
 -- | Build the API form of a stored transaction. The network decides which
 -- output scripts have an address. A SegWit-shaped script has none on Bitcoin
--- Cash, for example.
+-- Cash, for example. The id is the hash of the transaction without its
+-- witness; where it is known, as it is for a transaction read by its id,
+-- 'toTransactionWithId' saves serializing and hashing the transaction.
 toTransaction :: Network -> Ctx -> TxData -> Transaction
-toTransaction net ctx t =
+toTransaction net ctx t = toTransactionWithId net ctx (txHash t.tx) t
+
+-- | 'toTransaction' for a transaction whose id is known, given here. It
+-- serializes nothing: the size and the weight are counted from the lengths
+-- of the parts of the transaction ('txSizes'). Serializing and hashing a
+-- transaction took a quarter of the time of building its API form, for
+-- bytes that the store had just read. The id is taken as given, so it has
+-- to be the id of the transaction.
+toTransactionWithId :: Network -> Ctx -> TxHash -> TxData -> Transaction
+toTransactionWithId net ctx txid t =
   Transaction
     { version = t.tx.version,
       locktime = t.tx.locktime,
@@ -1145,34 +1157,48 @@ toTransaction net ctx t =
       deleted = t.deleted,
       rbf = t.rbf,
       timestamp = t.timestamp,
-      txid = TxHash (doubleSHA256 witless),
+      txid = txid,
       inputs = ins,
       outputs = outs,
-      size = fromIntegral (B.length full),
-      weight = fromIntegral (B.length witless * 3 + B.length full),
+      size = fromIntegral full,
+      weight = fromIntegral (witless * 3 + full),
       fee =
         if any isCoinbase ins
           then 0
           else inv `minus` outv
     }
   where
-    -- Serialize once with the witness and once without it, and only once
-    -- if there is no witness, when both are the same bytes. The id of the
-    -- transaction is the hash of the bytes without witness, as 'txHash'
-    -- computes it.
-    full, witless :: ByteString
-    full = runPutS (serialize t.tx)
-    witless
-      | hasWitness t.tx =
-          let Tx {..} = t.tx
-           in runPutS (serialize Tx {witness = [], ..})
-      | otherwise = full
+    (full, witless) = txSizes t.tx
     ins = zipWith3 f [0 ..] t.tx.inputs (t.tx.witness <> repeat [])
     inv = sum (map (.value) ins)
     outs = zipWith g [0 ..] t.tx.outputs
     outv = sum $ map (.value) outs
     f n i w = toInput net ctx i (IntMap.lookup n t.prevs) w
     g n o = toOutput net ctx o $ IntMap.lookup n t.spenders
+
+-- | The length of a transaction serialized, and its length without the
+-- witness, counted from the lengths of its parts as 'serialize' writes
+-- them: the witness, with its marker and flag, only if 'hasWitness', and
+-- one stack for each input.
+txSizes :: Tx -> (Int, Int)
+txSizes tx = (if hasWitness tx then witless + 2 + witnesses else witless, witless)
+  where
+    witless =
+      8
+        + list (length tx.inputs)
+        + sum [40 + bytes (B.length i.script) | i <- tx.inputs]
+        + list (length tx.outputs)
+        + sum [8 + bytes (B.length o.script) | o <- tx.outputs]
+    witnesses = sum [stack w | w <- take (length tx.inputs) (tx.witness <> repeat [])]
+    stack w = list (length w) + sum (map (bytes . B.length) w)
+    bytes n = list n + n
+    -- the length of a count as a variable integer
+    list :: Int -> Int
+    list n
+      | n < 0xfd = 1
+      | n <= 0xffff = 3
+      | n <= 0xffffffff = 5
+      | otherwise = 9
 
 -- | Inverse of 'toTransaction'.
 fromTransaction :: Transaction -> TxData
