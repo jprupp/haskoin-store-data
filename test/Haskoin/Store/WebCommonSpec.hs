@@ -2,6 +2,8 @@
 
 module Haskoin.Store.WebCommonSpec (spec) where
 
+import Data.Aeson qualified as A
+import Data.Aeson.Types qualified as A
 import Data.ByteString qualified as B
 import Data.Maybe (fromJust)
 import Data.Proxy (Proxy (..))
@@ -9,8 +11,6 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Word (Word64)
 import Haskoin
-import Data.Aeson qualified as A
-import Data.Aeson.Types qualified as A
 import Haskoin.Store.Data (DeriveType (..), SerialList (..), TxRef)
 import Haskoin.Store.Gen (arbitraryDeriveType, arbitraryTransaction)
 import Haskoin.Store.WebCommon
@@ -20,33 +20,33 @@ import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
+spec = do
   -- each case on a random network: they differ in their address prefixes
   describe "Parameters" $ do
-    roundTrip ctx arbitraryAddress
-    roundTrip ctx (listOf . arbitraryAddress)
-    roundTrip ctx (const (arbitrary :: Gen StartParam))
-    roundTrip ctx (const (arbitrarySizedNatural :: Gen OffsetParam))
-    roundTrip ctx (const (arbitrarySizedNatural :: Gen LimitParam))
-    roundTrip ctx (const (arbitrarySizedNatural :: Gen HeightParam))
-    roundTrip ctx (const (arbitrary :: Gen HeightsParam))
-    roundTrip ctx (const (arbitrarySizedNatural :: Gen TimeParam))
-    roundTrip ctx (const (arbitraryXPubKey ctx))
-    roundTrip ctx arbitraryDeriveType
-    roundTrip ctx (const (NoCache <$> arbitrary))
-    roundTrip ctx (const (NoTx <$> arbitrary))
-    roundTrip ctx (const (listOf arbitraryBlockHash))
-    roundTrip ctx (const (listOf arbitraryTxHash))
+    roundTrip arbitraryAddress
+    roundTrip (listOf . arbitraryAddress)
+    roundTrip (const (arbitrary :: Gen StartParam))
+    roundTrip (const (arbitrarySizedNatural :: Gen OffsetParam))
+    roundTrip (const (arbitrarySizedNatural :: Gen LimitParam))
+    roundTrip (const (arbitrarySizedNatural :: Gen HeightParam))
+    roundTrip (const (arbitrary :: Gen HeightsParam))
+    roundTrip (const (arbitrarySizedNatural :: Gen TimeParam))
+    roundTrip (const (arbitraryXPubKey))
+    roundTrip arbitraryDeriveType
+    roundTrip (const (NoCache <$> arbitrary))
+    roundTrip (const (NoTx <$> arbitrary))
+    roundTrip (const (listOf arbitraryBlockHash))
+    roundTrip (const (listOf arbitraryTxHash))
 
   -- the client reads what the server writes: lists in the JSON of the
   -- network, and the rest in plain JSON
   describe "Responses" $ do
     prop "a list of transactions" . forAll (elements allNets) $ \net ->
       forAll (listOf (arbitraryTransaction net)) $ \xs ->
-        A.parseEither (parseResponse net ctx) (A.toJSON (map (marshalValue net) xs))
+        A.parseEither (parseResponse net) (A.toJSON (map (marshalValue net) xs))
           === Right (SerialList xs)
     prop "a list of references" . forAll (listOf arbitrary) $ \xs ->
-      A.parseEither (parseResponse btc ctx) (A.toJSON (xs :: [TxRef]))
+      A.parseEither (parseResponse btc) (A.toJSON (xs :: [TxRef]))
         === Right (SerialList xs)
 
   describe "Start of a page" $ do
@@ -59,13 +59,13 @@ spec = prepareContext $ \ctx -> do
 
   describe "Derivation" $
     it "is only normal on networks without SegWit" $ do
-      encodeParam bch ctx DeriveP2WPKH `shouldBe` Nothing
-      encodeParam btc ctx DeriveP2WPKH `shouldBe` Just ["segwit"]
+      encodeParam bch DeriveP2WPKH `shouldBe` Nothing
+      encodeParam btc DeriveP2WPKH `shouldBe` Just ["segwit"]
 
   describe "Paths" $ do
     let addr = fromJust (textToAddr btc "1111111111111111111114oLvT2")
         path :: (ApiResource a b) => a -> String
-        path = cs . queryPath btc ctx
+        path = cs . queryPath btc
     it "of a block" $ do
       path (GetBlockBest (NoTx False)) `shouldBe` "/block/best"
       path (GetBlockHeight (HeightParam 5) (NoTx False)) `shouldBe` "/block/height/5"
@@ -74,19 +74,19 @@ spec = prepareContext $ \ctx -> do
     it "of an address" $
       path (GetAddrBalance addr) `shouldBe` "/address/1111111111111111111114oLvT2/balance"
     prop "of an xpub" $
-      forAll (arbitraryXPubKey ctx) $ \x ->
+      forAll (arbitraryXPubKey) $ \x ->
         path (GetXPubBalances x DeriveNormal (NoCache False))
-          `shouldBe` "/xpub/" <> cs (xPubExport btc ctx x) <> "/balances"
+          `shouldBe` "/xpub/" <> cs (xPubExport btc x) <> "/balances"
   where
     z = TxHash (sha256 B.empty)
-    parse = parseParam btc undefined :: [Text] -> Maybe StartParam
+    parse = parseParam btc :: [Text] -> Maybe StartParam
 
 -- | A parameter comes back from its encoding in a URL, on a random network.
-roundTrip :: forall a. (Eq a, Show a, Param a) => Ctx -> (Network -> Gen a) -> Spec
-roundTrip ctx g =
+roundTrip :: forall a. (Eq a, Show a, Param a) => (Network -> Gen a) -> Spec
+roundTrip g =
   prop (cs (proxyLabel (Proxy :: Proxy a))) . forAll (elements allNets) $ \net ->
     counterexample net.name . forAll (g net) $ \p ->
-      (encodeParam net ctx p >>= parseParam net ctx) `shouldBe` Just p
+      (encodeParam net p >>= parseParam net) `shouldBe` Just p
 
 instance Arbitrary StartParam where
   arbitrary =

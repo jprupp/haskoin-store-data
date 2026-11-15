@@ -61,16 +61,14 @@ anyNet :: (Network -> Gen a) -> Gen a
 anyNet g = elements allNets >>= g
 
 -- | Like 'jsonLaws', for JSON that depends on the network, which is random
--- for each case; @s@ is what the encoding takes, made from the network.
+-- for each case.
 marshalLaws ::
-  forall s a.
-  (Eq a, Show a, Typeable a, MarshalJSON s a) =>
-  (Network -> s) ->
+  forall a.
+  (Eq a, Show a, Typeable a, MarshalJSON Network a) =>
   (Network -> Gen a) ->
   Spec
-marshalLaws mk g = prop (name (g undefined)) . forAll (elements allNets) $ \net ->
-  let s = mk net
-   in counterexample net.name . forAll (g net) $ \x ->
-        parseMaybe (unmarshalValue s) (marshalValue s x) === Just x
-          .&&. (A.decode (encodingToLazyByteString (marshalEncoding s x)) :: Maybe Value)
-            === Just (marshalValue s x)
+marshalLaws g = prop (name (g undefined)) . forAll (elements allNets) $ \net ->
+  counterexample net.name . forAll (g net) $ \x ->
+    parseMaybe (unmarshalValue net) (marshalValue net x) === Just x
+      .&&. (A.decode (encodingToLazyByteString (marshalEncoding net x)) :: Maybe Value)
+        === Just (marshalValue net x)

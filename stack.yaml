@@ -11,5 +11,9 @@ packages:
   - .
 extra-deps:
   - base16-2.0
-  - secp256k1-haskell-2.0.1
-  - haskoin-core-1.6.4
+  # secp256k1-haskell: not on Hackage yet; back to a version at the next release
+  - git: https://github.com/jprupp/secp256k1-haskell.git
+    commit: 163232414cb621d6655f747479779bdf7b7da108
+  # haskoin-core: not on Hackage yet; back to a version at the next release
+  - git: https://github.com/jprupp/haskoin-core.git
+    commit: e5525e9409633b04315cb27c1d0b8ae40c686c94

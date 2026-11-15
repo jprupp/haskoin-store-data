@@ -16,8 +16,8 @@
 -- @
 -- import Data.Default (def)
 --
--- balance :: Ctx -> Address -> IO (Either Except Balance)
--- balance ctx addr = 'apiCall' ctx def ('GetAddrBalance' addr)
+-- balance :: Address -> IO (Either Except Balance)
+-- balance addr = 'apiCall' def ('GetAddrBalance' addr)
 -- @
 --
 -- Requests that take long lists of addresses, transactions or blocks can be
@@ -104,7 +104,6 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
 import Haskoin.Block (blockHashToHex)
-import Haskoin.Crypto (Ctx)
 import Haskoin.Network
 import Haskoin.Store.Data qualified as Store
 import Haskoin.Store.WebCommon
@@ -145,11 +144,11 @@ instance Default ApiConfig where
 --
 -- Usage (default options):
 --
--- > apiCall ctx def $ GetAddrsTxs addrs def
+-- > apiCall def $ GetAddrsTxs addrs def
 --
 -- With options:
 --
--- > apiCall ctx def $ GetAddrsUnspent addrs def {limit = Just 10}
+-- > apiCall def $ GetAddrsUnspent addrs def {limit = Just 10}
 --
 -- Only @GET@ and @POST@ endpoints are supported. The result is the error
 -- that the server answered with, or the response. A request that could
@@ -157,44 +156,42 @@ instance Default ApiConfig where
 -- the reason): no exception of the HTTP client leaves this function.
 apiCall ::
   (ApiResource a b) =>
-  Ctx ->
   ApiConfig ->
   a ->
   IO (Either Store.Except b)
-apiCall ctx (ApiConfig net apiHost) res =
-  case toOptions net ctx res of
+apiCall (ApiConfig net apiHost) res =
+  case toOptions net res of
     Left e -> return (Left e)
     -- as for a parameter of the query string that cannot be written
-    Right _ | not (pathEncodes net ctx res) -> return (Left (Store.UserError "Invalid Param"))
+    Right _ | not (pathEncodes net res) -> return (Left (Store.UserError "Invalid Param"))
     Right args ->
-      let url = apiHost <> net.name <> cs (queryPath net ctx res)
+      let url = apiHost <> net.name <> cs (queryPath net res)
        in case resourceMethod $ asProxy res of
-            GET -> getJSON net ctx args url
+            GET -> getJSON net args url
             POST ->
               case resourceBody res of
-                Just (PostBox body) -> postJSON net ctx args url body
+                Just (PostBox body) -> postJSON net args url body
                 _ -> return . Left $ Store.StringError "Could not post resource"
             _ -> return . Left $ Store.StringError "Unsupported HTTP method"
 
 -- | Batch commands that have a large list of arguments:
 --
--- > apiBatch ctx 20 def (GetAddrsTxs addrs def)
+-- > apiBatch 20 def (GetAddrsTxs addrs def)
 --
 -- The list is split into chunks of the given size, one call is made per chunk,
 -- and the results are concatenated. The calls stop at the first error. A
 -- size of zero is taken for one.
 apiBatch ::
   (Batchable a b) =>
-  Ctx ->
   Natural ->
   ApiConfig ->
   a ->
   IO (Either Store.Except b)
-apiBatch ctx i conf res = go mempty (resourceBatch i res)
+apiBatch i conf res = go mempty (resourceBatch i res)
   where
     go acc [] = return (Right acc)
     go acc (r : rs) =
-      apiCall ctx conf r >>= \case
+      apiCall conf r >>= \case
         Left e -> return (Left e)
         Right b -> go (acc <> b) rs
 
@@ -312,25 +309,23 @@ instance Batchable GetAddrsUnspent (Store.SerialList Store.Unspent) where
 toOptions ::
   (ApiResource a b) =>
   Network ->
-  Ctx ->
   a ->
   Either Store.Except (Endo HTTP.Options)
-toOptions net ctx res =
+toOptions net res =
   mconcat <$> mapM f (snd $ queryParams res)
   where
-    f (ParamBox p) = toOption net ctx p
+    f (ParamBox p) = toOption net p
 
 -- | HTTP option for one query string parameter.
 toOption ::
   (Param a) =>
   Network ->
-  Ctx ->
   a ->
   Either Store.Except (Endo HTTP.Options)
-toOption net ctx a = do
+toOption net a = do
   res <-
     maybeToEither (Store.UserError "Invalid Param") $
-      encodeParam net ctx a
+      encodeParam net a
   return $ applyOpt (paramLabel a) res
 
 -- | Set a query string parameter to comma-separated values.
@@ -341,26 +336,24 @@ applyOpt p t = Endo $ HTTP.param p .~ [Text.intercalate "," t]
 getJSON ::
   (ApiResponse a) =>
   Network ->
-  Ctx ->
   Endo HTTP.Options ->
   String ->
   IO (Either Store.Except a)
-getJSON net ctx opts url = do
+getJSON net opts url = do
   r <- reaching (HTTP.getWith (jsonOpts opts) url)
-  return (r >>= readResponse net ctx)
+  return (r >>= readResponse net)
 
 -- | Make a @POST@ request with a body of text and read the JSON response.
 postJSON ::
   (ApiResponse a) =>
   Network ->
-  Ctx ->
   Endo HTTP.Options ->
   String ->
   Text ->
   IO (Either Store.Except a)
-postJSON net ctx opts url body = do
+postJSON net opts url body = do
   r <- reaching (HTTP.postWith (jsonOpts opts) url (Raw "text/plain" (RequestBodyBS (Text.encodeUtf8 body))))
-  return (r >>= readResponse net ctx)
+  return (r >>= readResponse net)
 
 -- | Make a request, and give the error that the server answered with
 -- ('checkStatus'), or the reason why there was no answer, as a value. A
@@ -375,9 +368,9 @@ reaching act =
     unreached (InvalidUrlException url why) = Store.StringError ("Not a URL: " <> url <> ": " <> why)
 
 -- | Read a response from the JSON of its body.
-readResponse :: (ApiResponse a) => Network -> Ctx -> HTTP.Response BSL.ByteString -> Either Store.Except a
-readResponse net ctx res =
-  case A.eitherDecode (res ^. HTTP.responseBody) >>= A.parseEither (parseResponse net ctx) of
+readResponse :: (ApiResponse a) => Network -> HTTP.Response BSL.ByteString -> Either Store.Except a
+readResponse net res =
+  case A.eitherDecode (res ^. HTTP.responseBody) >>= A.parseEither (parseResponse net) of
     Left e -> Left (Store.StringError ("Could not read the response: " <> e))
     Right a -> Right a
 

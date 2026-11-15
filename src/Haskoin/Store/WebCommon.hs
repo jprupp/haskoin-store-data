@@ -96,8 +96,8 @@ import Data.Aeson qualified as A
 import Data.Aeson.Types qualified as A
 import Data.Bytes.Put (runPutS)
 import Data.Bytes.Serial
-import Data.Foldable (toList)
 import Data.Default (Default, def)
+import Data.Foldable (toList)
 import Data.Proxy (Proxy (..))
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -109,7 +109,7 @@ import Haskoin.Block
     blockHashToHex,
     hexToBlockHash,
   )
-import Haskoin.Crypto (Ctx, Hash256)
+import Haskoin.Crypto (Hash256)
 import Haskoin.Crypto.Keys
 import Haskoin.Network.Data
 import Haskoin.Store.Data qualified as Store
@@ -155,65 +155,65 @@ newtype PostBox = PostBox Text
 --
 -- The API speaks JSON only. Many responses hold addresses, whose text
 -- depends on the network ('MarshalJSON'), so the reader is given the
--- network and the context, and a type that needs neither ignores them.
--- A class of its own, rather than @MarshalJSON (Network, Ctx)@, lets each
+-- network, and a type that does not need it ignores it.
+-- A class of its own, rather than @MarshalJSON Network@, lets each
 -- response say which of its JSON instances to use, without new instances
 -- on the data types.
 class ApiResponse b where
   -- | Read a response from its JSON.
-  parseResponse :: Network -> Ctx -> A.Value -> A.Parser b
+  parseResponse :: Network -> A.Value -> A.Parser b
 
 instance ApiResponse Store.BlockData where
-  parseResponse net _ = unmarshalValue net
+  parseResponse net = unmarshalValue net
 
 instance ApiResponse Store.Transaction where
-  parseResponse net _ = unmarshalValue net
+  parseResponse net = unmarshalValue net
 
 instance ApiResponse Store.Balance where
-  parseResponse net _ = unmarshalValue net
+  parseResponse net = unmarshalValue net
 
 instance ApiResponse Store.Unspent where
-  parseResponse net _ = unmarshalValue net
+  parseResponse net = unmarshalValue net
 
 instance ApiResponse Store.XPubBal where
-  parseResponse net _ = unmarshalValue net
+  parseResponse net = unmarshalValue net
 
 instance ApiResponse Store.XPubUnspent where
-  parseResponse net _ = unmarshalValue net
+  parseResponse net = unmarshalValue net
 
 instance ApiResponse Store.TxRef where
-  parseResponse _ _ = A.parseJSON
+  parseResponse _ = A.parseJSON
 
 instance ApiResponse Store.XPubSummary where
-  parseResponse _ _ = A.parseJSON
+  parseResponse _ = A.parseJSON
 
 instance ApiResponse Store.PeerInfo where
-  parseResponse _ _ = A.parseJSON
+  parseResponse _ = A.parseJSON
 
 instance ApiResponse Store.HealthCheck where
-  parseResponse _ _ = A.parseJSON
+  parseResponse _ = A.parseJSON
 
 instance ApiResponse Store.TxId where
-  parseResponse _ _ = A.parseJSON
+  parseResponse _ = A.parseJSON
 
 instance ApiResponse Store.Event where
-  parseResponse _ _ = A.parseJSON
+  parseResponse _ = A.parseJSON
 
 instance ApiResponse TxHash where
-  parseResponse _ _ = A.parseJSON
+  parseResponse _ = A.parseJSON
 
 instance (A.FromJSON a) => ApiResponse (Store.GenericResult a) where
-  parseResponse _ _ = A.parseJSON
+  parseResponse _ = A.parseJSON
 
 instance (Serial a) => ApiResponse (Store.RawResult a) where
-  parseResponse _ _ = A.parseJSON
+  parseResponse _ = A.parseJSON
 
 instance (Serial a) => ApiResponse (Store.RawResultList a) where
-  parseResponse _ _ = A.parseJSON
+  parseResponse _ = A.parseJSON
 
 instance (ApiResponse a) => ApiResponse (Store.SerialList a) where
-  parseResponse net ctx =
-    A.withArray "list" $ fmap Store.SerialList . mapM (parseResponse net ctx) . toList
+  parseResponse net =
+    A.withArray "list" $ fmap Store.SerialList . mapM (parseResponse net) . toList
 
 -- | Parameter value of any type.
 data ParamBox = forall p. (Eq p, Param p) => ParamBox !p
@@ -607,21 +607,21 @@ asProxy = const Proxy
 -- | Whether the path parameters of a request can be written for the
 -- network: an address of another network cannot. 'queryPath' fails with
 -- 'error' when they cannot, so ask this first.
-pathEncodes :: (ApiResource a b) => Network -> Ctx -> a -> Bool
-pathEncodes net ctx a = all ok (fst (queryParams a))
+pathEncodes :: (ApiResource a b) => Network -> a -> Bool
+pathEncodes net a = all ok (fst (queryParams a))
   where
-    ok (ParamBox p) = case encodeParam net ctx p of
+    ok (ParamBox p) = case encodeParam net p of
       Just [_] -> True
       _ -> False
 
 -- | Path of a request, with its path parameters filled in. Fails with
 -- 'error' for a parameter that the network cannot write ('pathEncodes').
-queryPath :: (ApiResource a b) => Network -> Ctx -> a -> Text
-queryPath net ctx a = f $ encParam <$> fst (queryParams a)
+queryPath :: (ApiResource a b) => Network -> a -> Text
+queryPath net a = f $ encParam <$> fst (queryParams a)
   where
     f = resourcePath $ asProxy a
     encParam (ParamBox p) =
-      case encodeParam net ctx p of
+      case encodeParam net p of
         Just [res] -> res
         _ -> error "Invalid query param"
 
@@ -650,21 +650,21 @@ class Param a where
 
   -- | Encode a value as one or more strings. A list parameter is sent as
   -- comma-separated values.
-  encodeParam :: Network -> Ctx -> a -> Maybe [Text]
+  encodeParam :: Network -> a -> Maybe [Text]
 
   -- | Parse a value from one or more strings.
-  parseParam :: Network -> Ctx -> [Text] -> Maybe a
+  parseParam :: Network -> [Text] -> Maybe a
 
 instance Param Address where
   proxyLabel = const "address"
-  encodeParam net _ctx a = (: []) <$> addrToText net a
-  parseParam net _ctx [a] = textToAddr net a
-  parseParam _net _ctx _ = Nothing
+  encodeParam net a = (: []) <$> addrToText net a
+  parseParam net [a] = textToAddr net a
+  parseParam _net _ = Nothing
 
 instance Param [Address] where
   proxyLabel = const "addresses"
-  encodeParam net _ctx = mapM (addrToText net)
-  parseParam net _ctx = mapM (textToAddr net)
+  encodeParam net = mapM (addrToText net)
+  parseParam net = mapM (textToAddr net)
 
 -- | Where a page of results starts. In URLs it is a transaction hash, a block
 -- height, or a Unix timestamp. Numbers up to 1230768000 are heights and larger
@@ -680,7 +680,7 @@ data StartParam
 
 instance Param StartParam where
   proxyLabel = const "height"
-  encodeParam _net _ctx p =
+  encodeParam _net p =
     case p of
       StartParamHash h -> return [txHashToHex (TxHash h)]
       StartParamHeight h -> do
@@ -689,7 +689,7 @@ instance Param StartParam where
       StartParamTime t -> do
         guard $ t > 1230768000
         return [cs $ show t]
-  parseParam _net _ctx [s] =
+  parseParam _net [s] =
     parseHash <|> parseHeight <|> parseUnix
     where
       parseHash = do
@@ -704,7 +704,7 @@ instance Param StartParam where
         x <- bounded s
         guard $ x > 1230768000
         return $ StartParamTime x
-  parseParam _net _ctx _ = Nothing
+  parseParam _net _ = Nothing
 
 -- | A whole number written in decimal digits and nothing else.
 -- 'Text.Read.readMaybe' also takes hexadecimal and spaces around, and at
@@ -731,9 +731,9 @@ instance Default OffsetParam where
 
 instance Param OffsetParam where
   proxyLabel = const "offset"
-  encodeParam _net _ctx (OffsetParam o) = Just [cs $ show o]
-  parseParam _net _ctx [s] = OffsetParam <$> natural s
-  parseParam _net _ctx _ = Nothing
+  encodeParam _net (OffsetParam o) = Just [cs $ show o]
+  parseParam _net [s] = OffsetParam <$> natural s
+  parseParam _net _ = Nothing
 
 -- | Maximum number of results (@limit@).
 newtype LimitParam = LimitParam {get :: Natural}
@@ -741,9 +741,9 @@ newtype LimitParam = LimitParam {get :: Natural}
 
 instance Param LimitParam where
   proxyLabel = const "limit"
-  encodeParam _net _ctx (LimitParam l) = Just [cs $ show l]
-  parseParam _net _ctx [s] = LimitParam <$> natural s
-  parseParam _net _ctx _ = Nothing
+  encodeParam _net (LimitParam l) = Just [cs $ show l]
+  parseParam _net [s] = LimitParam <$> natural s
+  parseParam _net _ = Nothing
 
 -- | Pagination of a list of results.
 data LimitsParam = LimitsParam
@@ -766,9 +766,9 @@ newtype HeightParam = HeightParam {get :: Natural}
 
 instance Param HeightParam where
   proxyLabel = const "height"
-  encodeParam _net _ctx (HeightParam h) = Just [cs $ show h]
-  parseParam _net _ctx [s] = HeightParam <$> natural s
-  parseParam _net _ctx _ = Nothing
+  encodeParam _net (HeightParam h) = Just [cs $ show h]
+  parseParam _net [s] = HeightParam <$> natural s
+  parseParam _net _ = Nothing
 
 -- | List of block heights (@heights@).
 newtype HeightsParam = HeightsParam {get :: [Natural]}
@@ -776,8 +776,8 @@ newtype HeightsParam = HeightsParam {get :: [Natural]}
 
 instance Param HeightsParam where
   proxyLabel = const "heights"
-  encodeParam _net _ctx (HeightsParam hs) = Just $ cs . show <$> hs
-  parseParam _net _ctx xs = HeightsParam <$> mapM natural xs
+  encodeParam _net (HeightsParam hs) = Just $ cs . show <$> hs
+  parseParam _net xs = HeightsParam <$> mapM natural xs
 
 -- | Unix timestamp in seconds (@time@).
 newtype TimeParam = TimeParam {get :: Store.UnixTime}
@@ -785,22 +785,22 @@ newtype TimeParam = TimeParam {get :: Store.UnixTime}
 
 instance Param TimeParam where
   proxyLabel = const "time"
-  encodeParam _net _ctx (TimeParam t) = Just [cs $ show t]
-  parseParam _net _ctx [s] = TimeParam <$> bounded s
-  parseParam _net _ctx _ = Nothing
+  encodeParam _net (TimeParam t) = Just [cs $ show t]
+  parseParam _net [s] = TimeParam <$> bounded s
+  parseParam _net _ = Nothing
 
 instance Param XPubKey where
   proxyLabel = const "xpub"
-  encodeParam net ctx p = Just [xPubExport net ctx p]
-  parseParam net ctx [s] = xPubImport net ctx s
-  parseParam _net _ctx _ = Nothing
+  encodeParam net p = Just [xPubExport net p]
+  parseParam net [s] = xPubImport net s
+  parseParam _net _ = Nothing
 
 instance Param Store.DeriveType where
   proxyLabel = const "derive"
-  encodeParam net _ctx p = do
+  encodeParam net p = do
     guard (net.segWit || p == Store.DeriveNormal)
     Just [Store.deriveTypeToText p]
-  parseParam net _ctx d = do
+  parseParam net d = do
     res <- case d of
       [x] -> Store.textToDeriveType x
       _ -> Nothing
@@ -816,9 +816,9 @@ instance Default NoCache where
 
 instance Param NoCache where
   proxyLabel = const "nocache"
-  encodeParam _net _ctx (NoCache True) = Just ["true"]
-  encodeParam _net _ctx (NoCache False) = Just ["false"]
-  parseParam _net _ctx = \case
+  encodeParam _net (NoCache True) = Just ["true"]
+  encodeParam _net (NoCache False) = Just ["false"]
+  parseParam _net = \case
     ["true"] -> Just $ NoCache True
     ["false"] -> Just $ NoCache False
     _ -> Nothing
@@ -833,31 +833,31 @@ instance Default NoTx where
 
 instance Param NoTx where
   proxyLabel = const "notx"
-  encodeParam _net _ctx (NoTx True) = Just ["true"]
-  encodeParam _net _ctx (NoTx False) = Just ["false"]
-  parseParam _net _ctx = \case
+  encodeParam _net (NoTx True) = Just ["true"]
+  encodeParam _net (NoTx False) = Just ["false"]
+  parseParam _net = \case
     ["true"] -> Just $ NoTx True
     ["false"] -> Just $ NoTx False
     _ -> Nothing
 
 instance Param BlockHash where
   proxyLabel = const "block"
-  encodeParam _net _ctx b = Just [blockHashToHex b]
-  parseParam _net _ctx [s] = hexToBlockHash s
-  parseParam _net _ctx _ = Nothing
+  encodeParam _net b = Just [blockHashToHex b]
+  parseParam _net [s] = hexToBlockHash s
+  parseParam _net _ = Nothing
 
 instance Param [BlockHash] where
   proxyLabel = const "blocks"
-  encodeParam _net _ctx bs = Just $ blockHashToHex <$> bs
-  parseParam _net _ctx = mapM hexToBlockHash
+  encodeParam _net bs = Just $ blockHashToHex <$> bs
+  parseParam _net = mapM hexToBlockHash
 
 instance Param TxHash where
   proxyLabel = const "txid"
-  encodeParam _net _ctx t = Just [txHashToHex t]
-  parseParam _net _ctx [s] = hexToTxHash s
-  parseParam _net _ctx _ = Nothing
+  encodeParam _net t = Just [txHashToHex t]
+  parseParam _net [s] = hexToTxHash s
+  parseParam _net _ = Nothing
 
 instance Param [TxHash] where
   proxyLabel = const "txids"
-  encodeParam _net _ctx ts = Just $ txHashToHex <$> ts
-  parseParam _net _ctx = mapM hexToTxHash
+  encodeParam _net ts = Just $ txHashToHex <$> ts
+  parseParam _net = mapM hexToTxHash

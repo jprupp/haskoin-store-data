@@ -73,7 +73,7 @@ chunk bytes = C.pack (hex (B.length bytes)) <> "\r\n" <> bytes <> "\r\n"
     hex n = let (q, r) = n `divMod` 16 in (if q > 0 then hex q else "") <> [("0123456789abcdef" !! r)]
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
+spec = do
   describe "Encoders" $ do
     it "write a peer whose user agent is not UTF-8" $ do
       let peer =
@@ -89,9 +89,9 @@ spec = prepareContext $ \ctx -> do
 
   describe "Parsers" $ do
     it "refuse a path of an xpub that is not one, instead of failing later" $ do
-      key <- generate (arbitraryXPubKey ctx)
-      let good = marshalValue (btc, ctx) BinfoXPubPath {key = key, deriv = Deriv :/ 0 :/ 1}
-          parse v = A.parseEither (unmarshalValue (btc, ctx)) v :: Either String BinfoXPubPath
+      key <- generate (arbitraryXPubKey)
+      let good = marshalValue btc BinfoXPubPath {key = key, deriv = Deriv :/ 0 :/ 1}
+          parse v = A.parseEither (unmarshalValue btc) v :: Either String BinfoXPubPath
       parse good `shouldSatisfy` (not . failed)
       forM_ ["M/0'/1", "0/1", "nonsense"] $ \path ->
         evaluate (failed (parse (with "path" (A.String path) good))) `shouldReturn` True
@@ -102,7 +102,7 @@ spec = prepareContext $ \ctx -> do
       parse (A.object ["error" A..= ("user-error" :: Text), "message" A..= (5 :: Int)])
         `shouldBe` Right (UserError "5")
     it "refuse bytes after a raw value" $ do
-      tx <- generate (arbitraryTx btc ctx)
+      tx <- generate (arbitraryTx btc)
       let good = A.toJSON (RawResult tx)
           hex = case good of
             A.Object o | Just (A.String t) <- KeyMap.lookup "result" o -> t
@@ -132,24 +132,24 @@ spec = prepareContext $ \ctx -> do
       parseBinfoTxId "18446744073709551616" `shouldBe` Nothing
       parseBinfoFilter " 0x6 " `shouldSatisfy` (not . isJust)
       parseBinfoFilter "6" `shouldSatisfy` isJust
-      (parseParam btc ctx ["-1"] :: Maybe TimeParam) `shouldBe` Nothing
-      (parseParam btc ctx ["18446744073709551616"] :: Maybe TimeParam) `shouldBe` Nothing
-      (parseParam btc ctx ["1700000000"] :: Maybe TimeParam) `shouldBe` Just (TimeParam 1700000000)
-      (parseParam btc ctx ["-5"] :: Maybe StartParam) `shouldBe` Nothing
-      (parseParam btc ctx [" 5"] :: Maybe LimitParam) `shouldBe` Nothing
-      (parseParam btc ctx ["0x10"] :: Maybe OffsetParam) `shouldBe` Nothing
-      (parseParam btc ctx ["5"] :: Maybe LimitParam) `shouldBe` Just (LimitParam 5)
+      (parseParam btc ["-1"] :: Maybe TimeParam) `shouldBe` Nothing
+      (parseParam btc ["18446744073709551616"] :: Maybe TimeParam) `shouldBe` Nothing
+      (parseParam btc ["1700000000"] :: Maybe TimeParam) `shouldBe` Just (TimeParam 1700000000)
+      (parseParam btc ["-5"] :: Maybe StartParam) `shouldBe` Nothing
+      (parseParam btc [" 5"] :: Maybe LimitParam) `shouldBe` Nothing
+      (parseParam btc ["0x10"] :: Maybe OffsetParam) `shouldBe` Nothing
+      (parseParam btc ["5"] :: Maybe LimitParam) `shouldBe` Just (LimitParam 5)
     it "of a date before 1970 are refused" $ do
       parseBinfoDate "01-01-1960" `shouldBe` Nothing
       parseBinfoDate "01-01-2020" `shouldBe` Just (BinfoDate 1577836800)
     it "do not wrap around when one is taken from a smaller one" $ do
-      td <- generate (arbitraryTxData ctx)
+      td <- generate (arbitraryTxData)
       txDataFee td {prevs = IntMap.empty} `shouldBe` 0
       isOK BlockHealth {headers = 3000000000, blocks = 10, max = 2} `shouldBe` False
 
   describe "Order" $
     it "of xpub paths has no two different ones equal" $ do
-      key <- generate (arbitraryXPubKey ctx)
+      key <- generate (arbitraryXPubKey)
       let a = BinfoXPubPath {key = key, deriv = Deriv :/ 0}
           b = BinfoXPubPath {key = key {index = key.index + 1}, deriv = Deriv :/ 0}
       (a == b, compare a b == EQ) `shouldBe` (False, False)
@@ -160,20 +160,20 @@ spec = prepareContext $ \ctx -> do
         reason (Left (StringError why)) = why
         reason _ = ""
     it "answers an error for an address that the network cannot write" $
-      apiCall ctx (ApiConfig bch nowhere) (GetAddrBalance segwit) `shouldReturn` Left (UserError "Invalid Param")
+      apiCall (ApiConfig bch nowhere) (GetAddrBalance segwit) `shouldReturn` Left (UserError "Invalid Param")
     it "answers an error, and throws nothing, when there is no server" $ do
-      r <- apiCall ctx (ApiConfig btc nowhere) (GetAddrBalance segwit)
+      r <- apiCall (ApiConfig btc nowhere) (GetAddrBalance segwit)
       reason r `shouldSatisfy` ("Could not reach the server" `isPrefixOf`)
       e <- apiEvents (ApiConfig btc nowhere) (\_ -> return True)
       reason e `shouldSatisfy` ("Could not reach the server" `isPrefixOf`)
     it "ends a batch of size zero" $ do
-      r <- apiBatch ctx 0 (ApiConfig btc nowhere) (GetTxs [TxHash (sha256 ("a" :: B.ByteString))])
+      r <- apiBatch 0 (ApiConfig btc nowhere) (GetTxs [TxHash (sha256 ("a" :: B.ByteString))])
       reason r `shouldSatisfy` ("Could not reach the server" `isPrefixOf`)
     it "reads an error that comes in pieces" $ do
       let body = BL.toStrict (A.encode ThingNotFound)
           (one, two) = B.splitAt 10 body
       r <- serving [chunked "404 Not Found", chunk one, chunk two, "0\r\n\r\n"] $ \host ->
-        apiCall ctx (ApiConfig btc host) (GetAddrBalance segwit)
+        apiCall (ApiConfig btc host) (GetAddrBalance segwit)
       r `shouldBe` Left ThingNotFound
     it "says the status and the start of an answer that is not from the server" $ do
       let page = "<html>Bad Gateway</html>"
@@ -182,7 +182,7 @@ spec = prepareContext $ \ctx -> do
               <> C.pack (show (B.length page))
               <> "\r\n\r\n"
               <> page
-      r <- serving [answer] $ \host -> apiCall ctx (ApiConfig btc host) (GetAddrBalance segwit)
+      r <- serving [answer] $ \host -> apiCall (ApiConfig btc host) (GetAddrBalance segwit)
       r `shouldBe` Left (StringError "HTTP 502: <html>Bad Gateway</html>")
     it "goes on after a line of events that it does not know" $ do
       let one = TxHash (sha256 ("one" :: B.ByteString))

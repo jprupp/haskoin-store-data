@@ -22,14 +22,14 @@ database or network node of its own, so it is small to depend on.
 
 ```haskell
 import Data.Default (def)
-import Haskoin (btc, textToAddr, withContext)
+import Haskoin (btc, textToAddr)
 import Haskoin.Store.WebClient
 
 main :: IO ()
-main = withContext $ \ctx -> do
+main = do
   let cfg = def {net = btc} -- https://api.haskoin.com/btc/...
       Just addr = textToAddr btc "bc1q…"
-  r <- apiCall ctx cfg (GetAddrBalance addr)
+  r <- apiCall cfg (GetAddrBalance addr)
   print r
 ```
 
@@ -57,7 +57,7 @@ import Haskoin (marshalJSON)
 import Haskoin.Store.Data (EventCommand (..))
 
 -- a text frame: {"type":"watch","addresses":["bc1q…"]}
-frame = marshalJSON (net, ctx) (EventWatch [addr])
+frame = marshalJSON net (EventWatch [addr])
 ```
 
 Blocks are always told. A connection that has sent no command hears of

@@ -24,7 +24,7 @@ import Test.Hspec
 import Test.QuickCheck
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
+spec = do
   -- only the types that the server keeps in its database and caches have
   -- a binary encoding: the API speaks JSON
   describe "Binary encoding" $ do
@@ -33,13 +33,13 @@ spec = prepareContext $ \ctx -> do
     binaryLaws (arbitrary :: Gen BlockData)
     binaryLaws (arbitrary :: Gen Spender)
     binaryLaws (arbitrary :: Gen Prev)
-    binaryLaws (arbitraryTxData ctx)
+    binaryLaws arbitraryTxData
     -- also covered inside the types below, but each has its own cereal and
     -- binary instances
     binaryLaws (anyNet arbitraryBalance)
     binaryLaws (anyNet arbitraryUnspent)
     binaryLaws (anyNet arbitraryDeriveType)
-    binaryLaws (anyNet (`arbitraryXPubSpec` ctx))
+    binaryLaws (anyNet arbitraryXPubSpec)
     binaryLaws (anyNet arbitraryXPubBal)
 
   describe "JSON" $ do
@@ -71,20 +71,19 @@ spec = prepareContext $ \ctx -> do
   -- Balance, Unspent, StoreInput, StoreOutput and the inputs and outputs of
   -- BinfoTx are encoded through their own instances inside these.
   describe "JSON of a network" $ do
-    let withCtx = (,ctx)
-    marshalLaws id arbitraryXPubBal
-    marshalLaws id arbitraryXPubUnspent
-    marshalLaws id arbitraryBlockData
-    marshalLaws id arbitraryTransaction
-    marshalLaws withCtx (`arbitraryEventCommand` ctx)
-    marshalLaws withCtx (`arbitraryBinfoMultiAddr` ctx)
-    marshalLaws withCtx (`arbitraryBinfoBalance` ctx)
-    marshalLaws withCtx (`arbitraryBinfoBlock` ctx)
-    marshalLaws withCtx (`arbitraryBinfoTx` ctx)
-    marshalLaws withCtx (`arbitraryBinfoXPubPath` ctx)
-    marshalLaws withCtx (`arbitraryBinfoUnspent` ctx)
-    marshalLaws withCtx (`arbitraryBinfoRawAddr` ctx)
-    marshalLaws withCtx (`arbitraryBinfoMempool` ctx)
+    marshalLaws arbitraryXPubBal
+    marshalLaws arbitraryXPubUnspent
+    marshalLaws arbitraryBlockData
+    marshalLaws arbitraryTransaction
+    marshalLaws arbitraryEventCommand
+    marshalLaws arbitraryBinfoMultiAddr
+    marshalLaws arbitraryBinfoBalance
+    marshalLaws arbitraryBinfoBlock
+    marshalLaws arbitraryBinfoTx
+    marshalLaws arbitraryBinfoXPubPath
+    marshalLaws arbitraryBinfoUnspent
+    marshalLaws arbitraryBinfoRawAddr
+    marshalLaws arbitraryBinfoMempool
 
   describe "Health check" $ do
     let bare =
@@ -174,15 +173,15 @@ spec = prepareContext $ \ctx -> do
         `shouldBe` ["00", "01", "7f", "0080", "00ff", "0100", "00ffff"]
     it "reads addresses and xpubs separated by bars or commas" $
       forAll (vectorOf 3 (arbitraryAddress btc)) $ \as ->
-        forAll (arbitraryXPubKey ctx) $ \x ->
-          let txt = mconcat [t <> sep | (a, sep) <- zip as ["|", ",", "|"], Just t <- [addrToText btc a]] <> xPubExport btc ctx x
-           in parseBinfoAddr btc ctx txt `shouldBe` Just (map BinfoAddr as <> [BinfoXpub x])
+        forAll (arbitraryXPubKey) $ \x ->
+          let txt = mconcat [t <> sep | (a, sep) <- zip as ["|", ",", "|"], Just t <- [addrToText btc a]] <> xPubExport btc x
+           in parseBinfoAddr btc txt `shouldBe` Just (map BinfoAddr as <> [BinfoXpub x])
     it "refuses anything that is neither an address nor an xpub" $
-      parseBinfoAddr btc ctx "nonsense" `shouldBe` Nothing
+      parseBinfoAddr btc "nonsense" `shouldBe` Nothing
     it "reads nothing from nothing" $
-      parseBinfoAddr btc ctx "" `shouldBe` Just []
+      parseBinfoAddr btc "" `shouldBe` Just []
     it "gives the next indices of an xpub and counts only payments to it" $
-      forAll (arbitraryXPubSpec btc ctx) $ \x ->
+      forAll (arbitraryXPubSpec btc) $ \x ->
         forAll (vectorOf 3 (arbitraryAddress btc)) $ \as -> case as of
           [a1, a2, a3] ->
             let bal a r c = (zeroBalance a) {received = r, confirmed = c, txs = 1}
@@ -215,8 +214,8 @@ spec = prepareContext $ \ctx -> do
   describe "Coin instance of Unspent" $
     it "reads the input kind from the output script" $
       property $
-        forAll (arbitraryScriptOutput btc ctx) $ \so ->
-          case encodeOutput ctx so of
+        forAll (arbitraryScriptOutput btc) $ \so ->
+          case encodeOutput so of
             Left _ -> discard
             Right script ->
               let u =
@@ -244,14 +243,14 @@ spec = prepareContext $ \ctx -> do
                     timestamp = 0,
                     spenders = IntMap.empty
                   }
-           in map (marshalValue net) (toTransaction net ctx td).outputs
+           in map (marshalValue net) (toTransaction net td).outputs
         -- Pay to witness public key hash, from the examples of BIP 173.
         p2wpkh = "0014751e76e8199196d454941c45d1b3a323f1433bd6"
         -- OP_HASH256, a push of 32 bytes, OP_EQUAL.
         hashLock = "aa20bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb87"
     it "computes the id, size, weight and witnesses of the transaction" $
-      forAll (arbitraryTxData ctx) $ \td ->
-        let t = toTransaction btc ctx td
+      forAll (arbitraryTxData) $ \td ->
+        let t = toTransaction btc td
             len :: Tx -> Int
             len = B.length . runPutS . serialize
             witless = let Tx {..} = td.tx in Tx {witness = [], ..}
@@ -263,17 +262,17 @@ spec = prepareContext $ \ctx -> do
                            ws
                          )
     it "gives the same with the id given" $
-      forAll (arbitraryTxData ctx) $ \td ->
-        toTransactionWithId btc ctx (txHash td.tx) td `shouldBe` toTransaction btc ctx td
+      forAll (arbitraryTxData) $ \td ->
+        toTransactionWithId btc (txHash td.tx) td `shouldBe` toTransaction btc td
     it "counts sizes as serializing does, with large counts and pushes" $
       -- counts and lengths of 253 and more take more than a byte
-      forAll (arbitraryTxData ctx) $ \td -> forAll (choose (0, 3)) $ \k ->
+      forAll (arbitraryTxData) $ \td -> forAll (choose (0, 3)) $ \k ->
         let big = B.replicate (0xfc + k * 0x100) 0x51
             Tx {..} = td.tx
             grown = case outputs of
               TxOut v _ : os -> Tx {outputs = TxOut v big : os, ..}
               [] -> Tx {..}
-            t = toTransaction btc ctx (td {tx = grown} :: TxData)
+            t = toTransaction btc (td {tx = grown} :: TxData)
          in t.size `shouldBe` fromIntegral (B.length (runPutS (serialize grown)))
     -- an output has an address only where the network has that kind
     forM_

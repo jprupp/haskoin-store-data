@@ -138,7 +138,7 @@ where
 import Control.Applicative ((<|>))
 import Control.DeepSeq (NFData)
 import Control.Exception (Exception)
-import Control.Monad (guard, join, mzero, when, unless)
+import Control.Monad (guard, join, mzero, unless, when)
 import Data.Aeson
   ( FromJSON (..),
     ToJSON (..),
@@ -580,8 +580,8 @@ instance Coin Unspent where
   coinInputKind = scriptInputKind . (.script)
 
 -- | Kind of the input that spends an output with this script, for fee
--- estimation. Read from the script bytes, as no context is at hand to parse
--- public keys. A script hash or witness script hash does not tell what it
+-- estimation. Read from the script bytes, without parsing public keys: their
+-- shape is enough to tell the kind. A script hash or witness script hash does not tell what it
 -- hides: they are taken for the most common single-key case, a nested
 -- witness public key hash and a one-of-one witness multisig. Any other
 -- script counts as a public key hash.
@@ -1013,15 +1013,15 @@ instance Serialize Prev where
   get = deserialize
 
 -- | Input with information about the output it spends, which is missing for a coinbase.
-toInput :: Network -> Ctx -> TxIn -> Maybe Prev -> WitnessStack -> StoreInput
-toInput _ _ i Nothing w =
+toInput :: Network -> TxIn -> Maybe Prev -> WitnessStack -> StoreInput
+toInput _ i Nothing w =
   StoreCoinbase
     { outpoint = i.outpoint,
       sequence = i.sequence,
       script = i.script,
       witness = w
     }
-toInput net ctx i (Just p) w =
+toInput net i (Just p) w =
   StoreInput
     { outpoint = i.outpoint,
       sequence = i.sequence,
@@ -1029,17 +1029,17 @@ toInput net ctx i (Just p) w =
       pkscript = p.script,
       value = p.value,
       witness = w,
-      address = eitherToMaybe (scriptToAddressBS net ctx p.script)
+      address = eitherToMaybe (scriptToAddressBS net p.script)
     }
 
 -- | Output with its address and spender.
-toOutput :: Network -> Ctx -> TxOut -> Maybe Spender -> StoreOutput
-toOutput net ctx o s =
+toOutput :: Network -> TxOut -> Maybe Spender -> StoreOutput
+toOutput net o s =
   StoreOutput
     { value = o.value,
       script = o.script,
       spender = s,
-      address = eitherToMaybe (scriptToAddressBS net ctx o.script)
+      address = eitherToMaybe (scriptToAddressBS net o.script)
     }
 
 -- | Transaction as stored in the database.
@@ -1139,8 +1139,8 @@ txDataFee t =
 -- Cash, for example. The id is the hash of the transaction without its
 -- witness; where it is known, as it is for a transaction read by its id,
 -- 'toTransactionWithId' saves serializing and hashing the transaction.
-toTransaction :: Network -> Ctx -> TxData -> Transaction
-toTransaction net ctx t = toTransactionWithId net ctx (txHash t.tx) t
+toTransaction :: Network -> TxData -> Transaction
+toTransaction net t = toTransactionWithId net (txHash t.tx) t
 
 -- | 'toTransaction' for a transaction whose id is known, given here. It
 -- serializes nothing: the size and the weight are counted from the lengths
@@ -1148,8 +1148,8 @@ toTransaction net ctx t = toTransactionWithId net ctx (txHash t.tx) t
 -- transaction took a quarter of the time of building its API form, for
 -- bytes that the store had just read. The id is taken as given, so it has
 -- to be the id of the transaction.
-toTransactionWithId :: Network -> Ctx -> TxHash -> TxData -> Transaction
-toTransactionWithId net ctx txid t =
+toTransactionWithId :: Network -> TxHash -> TxData -> Transaction
+toTransactionWithId net txid t =
   Transaction
     { version = t.tx.version,
       locktime = t.tx.locktime,
@@ -1173,8 +1173,8 @@ toTransactionWithId net ctx txid t =
     inv = sum (map (.value) ins)
     outs = zipWith g [0 ..] t.tx.outputs
     outv = sum $ map (.value) outs
-    f n i w = toInput net ctx i (IntMap.lookup n t.prevs) w
-    g n o = toOutput net ctx o $ IntMap.lookup n t.spenders
+    f n i w = toInput net i (IntMap.lookup n t.prevs) w
+    g n o = toOutput net o $ IntMap.lookup n t.spenders
 
 -- | The length of a transaction serialized, and its length without the
 -- witness, counted from the lengths of its parts as 'serialize' writes
@@ -1812,10 +1812,10 @@ filterElement d
   | B.length d > maxFilterAddSize = fail "Filter element too long"
   | otherwise = return d
 
--- | The text of an address depends on the network, and that of an extended
--- public key needs the context of the library that checks it.
-instance MarshalJSON (Network, Ctx) EventCommand where
-  marshalValue (net, ctx) = \case
+-- | The text of an address and that of an extended public key depend on the
+-- network.
+instance MarshalJSON Network EventCommand where
+  marshalValue net = \case
     EventWatch as -> addresses "watch" as
     EventUnwatch as -> addresses "unwatch" as
     EventWatchXPub x -> xpub "watch" x
@@ -1839,11 +1839,11 @@ instance MarshalJSON (Network, Ctx) EventCommand where
       xpub t x =
         A.object
           [ "type" .= String t,
-            "xpub" .= marshalValue (net, ctx) x.key,
+            "xpub" .= marshalValue net x.key,
             "derive" .= deriveTypeToText x.deriv
           ]
 
-  unmarshalValue (net, ctx) =
+  unmarshalValue net =
     A.withObject "EventCommand" $ \o ->
       o .: "type" >>= \case
         "watch" -> watched o EventWatch EventWatchXPub
@@ -1866,7 +1866,7 @@ instance MarshalJSON (Network, Ctx) EventCommand where
       watched o as xs =
         o .:? "xpub" >>= \case
           Just v -> do
-            key <- unmarshalValue (net, ctx) v
+            key <- unmarshalValue net v
             name <- o .:? "derive" .!= "legacy"
             deriv <- maybe (fail "Unknown derivation") return (textToDeriveType name)
             return $ xs XPubSpec {..}
@@ -2178,12 +2178,12 @@ data BinfoMultiAddr = BinfoMultiAddr
   }
   deriving (Eq, Show, Generic, NFData)
 
-instance MarshalJSON (Network, Ctx) BinfoMultiAddr where
-  marshalValue (net', ctx) m =
+instance MarshalJSON Network BinfoMultiAddr where
+  marshalValue net' m =
     A.object $
-      [ "addresses" .= map (marshalValue (net, ctx)) m.addresses,
+      [ "addresses" .= map (marshalValue net) m.addresses,
         "wallet" .= m.wallet,
-        "txs" .= map (marshalValue (net, ctx)) m.txs,
+        "txs" .= map (marshalValue net) m.txs,
         "info" .= m.info,
         "recommend_include_fee" .= m.recommendFee
       ]
@@ -2191,22 +2191,22 @@ instance MarshalJSON (Network, Ctx) BinfoMultiAddr where
     where
       net = if not m.cashAddr && net' == bch then btc else net'
 
-  unmarshalValue (net, ctx) =
+  unmarshalValue net =
     A.withObject "BinfoMultiAddr" $ \o -> do
-      addresses <- mapM (unmarshalValue (net, ctx)) =<< o .: "addresses"
+      addresses <- mapM (unmarshalValue net) =<< o .: "addresses"
       wallet <- o .: "wallet"
-      txs <- mapM (unmarshalValue (net, ctx)) =<< o .: "txs"
+      txs <- mapM (unmarshalValue net) =<< o .: "txs"
       info <- o .: "info"
       recommendFee <- o .: "recommend_include_fee"
       cashAddr <- o .:? "cash_addr" .!= False
       return BinfoMultiAddr {..}
 
-  marshalEncoding (net', ctx) m =
+  marshalEncoding net' m =
     A.pairs $
       mconcat
-        [ "addresses" `A.pair` A.list (marshalEncoding (net, ctx)) m.addresses,
+        [ "addresses" `A.pair` A.list (marshalEncoding net) m.addresses,
           "wallet" `A.pair` toEncoding m.wallet,
-          "txs" `A.pair` A.list (marshalEncoding (net, ctx)) m.txs,
+          "txs" `A.pair` A.list (marshalEncoding net) m.txs,
           "info" `A.pair` toEncoding m.info,
           "recommend_include_fee" `A.pair` A.bool m.recommendFee,
           if m.cashAddr then "cash_addr" `A.pair` A.bool True else mempty
@@ -2233,8 +2233,8 @@ data BinfoRawAddr = BinfoRawAddr
   }
   deriving (Eq, Show, Generic, NFData)
 
-instance MarshalJSON (Network, Ctx) BinfoRawAddr where
-  marshalValue (net, ctx) r =
+instance MarshalJSON Network BinfoRawAddr where
+  marshalValue net r =
     A.object
       [ "hash160" .= h160,
         "address" .= address,
@@ -2243,19 +2243,19 @@ instance MarshalJSON (Network, Ctx) BinfoRawAddr where
         "total_received" .= r.received,
         "total_sent" .= r.sent,
         "final_balance" .= r.balance,
-        "txs" .= map (marshalValue (net, ctx)) r.txs
+        "txs" .= map (marshalValue net) r.txs
       ]
     where
       address = case r.address of
         BinfoAddr a -> marshalValue net a
-        BinfoXpub x -> marshalValue (net, ctx) x
+        BinfoXpub x -> marshalValue net x
       h160 =
         encodeHex . runPutS . serialize
           <$> case r.address of
             BinfoAddr a -> addressHash160 a
             _ -> Nothing
 
-  marshalEncoding (net, ctx) r =
+  marshalEncoding net r =
     A.pairs $
       mconcat
         [ "hash160" `A.pair` fromMaybe A.null_ h160,
@@ -2265,30 +2265,30 @@ instance MarshalJSON (Network, Ctx) BinfoRawAddr where
           "total_received" `A.pair` A.word64 r.received,
           "total_sent" `A.pair` A.int64 r.sent,
           "final_balance" `A.pair` A.word64 r.balance,
-          "txs" `A.pair` A.list (marshalEncoding (net, ctx)) r.txs
+          "txs" `A.pair` A.list (marshalEncoding net) r.txs
         ]
     where
       address = case r.address of
         BinfoAddr a -> marshalEncoding net a
-        BinfoXpub x -> marshalEncoding (net, ctx) x
+        BinfoXpub x -> marshalEncoding net x
       h160 =
         hexEncoding . runPutL . serialize
           <$> case r.address of
             BinfoAddr a -> addressHash160 a
             _ -> Nothing
 
-  unmarshalValue (net, ctx) =
+  unmarshalValue net =
     A.withObject "BinfoRawAddr" $ \o -> do
       addr <- o .: "address"
       address <-
         BinfoAddr <$> unmarshalValue net addr
-          <|> BinfoXpub <$> unmarshalValue (net, ctx) addr
+          <|> BinfoXpub <$> unmarshalValue net addr
       balance <- o .: "final_balance"
       utxo <- o .: "n_unredeemed"
       ntx <- o .: "n_tx"
       received <- o .: "total_received"
       sent <- o .: "total_sent"
-      txs <- mapM (unmarshalValue (net, ctx)) =<< o .: "txs"
+      txs <- mapM (unmarshalValue net) =<< o .: "txs"
       return BinfoRawAddr {..}
 
 -- | Balance of an address or xpub in @\/blockchain\/balance@.
@@ -2359,8 +2359,8 @@ data BinfoBalance
       }
   deriving (Eq, Show, Generic, NFData)
 
-instance MarshalJSON (Network, Ctx) BinfoBalance where
-  marshalValue (net, _ctx) b@BinfoAddrBalance {} =
+instance MarshalJSON Network BinfoBalance where
+  marshalValue net b@BinfoAddrBalance {} =
     A.object
       [ "address" .= marshalValue net b.address,
         "final_balance" .= b.balance,
@@ -2368,9 +2368,9 @@ instance MarshalJSON (Network, Ctx) BinfoBalance where
         "total_received" .= b.received,
         "total_sent" .= b.sent
       ]
-  marshalValue (net, ctx) b@BinfoXPubBalance {} =
+  marshalValue net b@BinfoXPubBalance {} =
     A.object
-      [ "address" .= marshalValue (net, ctx) b.xpub,
+      [ "address" .= marshalValue net b.xpub,
         "change_index" .= b.change,
         "account_index" .= b.external,
         "final_balance" .= b.balance,
@@ -2379,11 +2379,11 @@ instance MarshalJSON (Network, Ctx) BinfoBalance where
         "total_sent" .= b.sent
       ]
 
-  unmarshalValue (net, ctx) =
+  unmarshalValue net =
     A.withObject "BinfoBalance" $ \o -> x o <|> a o
     where
       x o = do
-        xpub <- unmarshalValue (net, ctx) =<< o .: "address"
+        xpub <- unmarshalValue net =<< o .: "address"
         change <- o .: "change_index"
         external <- o .: "account_index"
         balance <- o .: "final_balance"
@@ -2399,7 +2399,7 @@ instance MarshalJSON (Network, Ctx) BinfoBalance where
         sent <- o .: "total_sent"
         return BinfoAddrBalance {..}
 
-  marshalEncoding (net, _ctx) b@BinfoAddrBalance {} =
+  marshalEncoding net b@BinfoAddrBalance {} =
     A.pairs $
       mconcat
         [ "address" `A.pair` marshalEncoding net b.address,
@@ -2408,10 +2408,10 @@ instance MarshalJSON (Network, Ctx) BinfoBalance where
           "total_received" `A.pair` A.word64 b.received,
           "total_sent" `A.pair` A.word64 b.sent
         ]
-  marshalEncoding (net, ctx) b@BinfoXPubBalance {} =
+  marshalEncoding net b@BinfoXPubBalance {} =
     A.pairs $
       mconcat
-        [ "address" `A.pair` marshalEncoding (net, ctx) b.xpub,
+        [ "address" `A.pair` marshalEncoding net b.xpub,
           "change_index" `A.pair` A.word32 b.change,
           "account_index" `A.pair` A.word32 b.external,
           "final_balance" `A.pair` A.word64 b.balance,
@@ -2420,14 +2420,14 @@ instance MarshalJSON (Network, Ctx) BinfoBalance where
           "total_sent" `A.pair` A.word64 b.sent
         ]
 
-instance MarshalJSON (Network, Ctx) [BinfoBalance] where
-  marshalValue (net, ctx) addrs =
-    toJSON $ map (marshalValue (net, ctx)) addrs
-  marshalEncoding (net, ctx) =
-    A.list (marshalEncoding (net, ctx))
-  unmarshalValue (net, ctx) =
+instance MarshalJSON Network [BinfoBalance] where
+  marshalValue net addrs =
+    toJSON $ map (marshalValue net) addrs
+  marshalEncoding net =
+    A.list (marshalEncoding net)
+  unmarshalValue net =
     A.withArray "[BinfoBalance]" $
-      fmap V.toList . mapM (unmarshalValue (net, ctx))
+      fmap V.toList . mapM (unmarshalValue net)
 
 -- | Totals of all addresses and xpubs in @\/blockchain\/multiaddr@.
 data BinfoWallet = BinfoWallet
@@ -2505,8 +2505,8 @@ data BinfoUnspent = BinfoUnspent
   }
   deriving (Eq, Show, Generic, NFData)
 
-instance MarshalJSON (Network, Ctx) BinfoUnspent where
-  marshalValue (net, ctx) u =
+instance MarshalJSON Network BinfoUnspent where
+  marshalValue net u =
     A.object $
       [ "tx_hash_big_endian" .= u.txid,
         "tx_hash" .= encodeHex (runPutS (serialize u.txid.get)),
@@ -2517,11 +2517,11 @@ instance MarshalJSON (Network, Ctx) BinfoUnspent where
         "confirmations" .= u.confirmations,
         "tx_index" .= u.txidx
       ]
-        <> [ "xpub" .= marshalValue (net, ctx) x
+        <> [ "xpub" .= marshalValue net x
            | x <- maybeToList u.xpub
            ]
 
-  marshalEncoding (net, ctx) u =
+  marshalEncoding net u =
     A.pairs $
       mconcat
         [ "tx_hash_big_endian" `A.pair` toEncoding u.txid,
@@ -2532,10 +2532,10 @@ instance MarshalJSON (Network, Ctx) BinfoUnspent where
           "value_hex" `A.pair` A.text (binfoHexValue u.value),
           "confirmations" `A.pair` A.int32 u.confirmations,
           "tx_index" `A.pair` toEncoding u.txidx,
-          maybe mempty (("xpub" `A.pair`) . marshalEncoding (net, ctx)) u.xpub
+          maybe mempty (("xpub" `A.pair`) . marshalEncoding net) u.xpub
         ]
 
-  unmarshalValue (net, ctx) =
+  unmarshalValue net =
     A.withObject "BinfoUnspent" $ \o -> do
       txid <- o .: "tx_hash_big_endian"
       index <- o .: "tx_output_n"
@@ -2543,7 +2543,7 @@ instance MarshalJSON (Network, Ctx) BinfoUnspent where
       value <- o .: "value"
       confirmations <- o .: "confirmations"
       txidx <- o .: "tx_index"
-      xpub <- mapM (unmarshalValue (net, ctx)) =<< o .:? "xpub"
+      xpub <- mapM (unmarshalValue net) =<< o .:? "xpub"
       return BinfoUnspent {..}
 
 -- | Response of @\/blockchain\/unspent@.
@@ -2551,23 +2551,23 @@ newtype BinfoUnspents = BinfoUnspents [BinfoUnspent]
   deriving stock (Eq, Show, Generic)
   deriving anyclass (NFData)
 
-instance MarshalJSON (Network, Ctx) BinfoUnspents where
-  marshalValue (net, ctx) (BinfoUnspents us) =
+instance MarshalJSON Network BinfoUnspents where
+  marshalValue net (BinfoUnspents us) =
     A.object
       [ "notice" .= T.empty,
-        "unspent_outputs" .= map (marshalValue (net, ctx)) us
+        "unspent_outputs" .= map (marshalValue net) us
       ]
 
-  marshalEncoding (net, ctx) (BinfoUnspents us) =
+  marshalEncoding net (BinfoUnspents us) =
     A.pairs $
       mconcat
         [ "notice" `A.pair` A.text T.empty,
-          "unspent_outputs" `A.pair` A.list (marshalEncoding (net, ctx)) us
+          "unspent_outputs" `A.pair` A.list (marshalEncoding net) us
         ]
 
-  unmarshalValue (net, ctx) =
+  unmarshalValue net =
     A.withObject "BinfoUnspents" $ \o -> do
-      us <- mapM (unmarshalValue (net, ctx)) =<< o .: "unspent_outputs"
+      us <- mapM (unmarshalValue net) =<< o .: "unspent_outputs"
       return (BinfoUnspents us)
 
 -- | Block in the Blockchain.info format, from its data, its transactions and the hashes of its children.
@@ -2629,8 +2629,8 @@ data BinfoBlock = BinfoBlock
   }
   deriving (Eq, Show, Generic, NFData)
 
-instance MarshalJSON (Network, Ctx) BinfoBlock where
-  marshalValue (net, ctx) b =
+instance MarshalJSON Network BinfoBlock where
+  marshalValue net b =
     A.object
       [ "hash" .= b.hash,
         "ver" .= b.version,
@@ -2647,10 +2647,10 @@ instance MarshalJSON (Network, Ctx) BinfoBlock where
         "main_chain" .= b.main,
         "height" .= b.height,
         "weight" .= b.weight,
-        "tx" .= map (marshalValue (net, ctx)) b.txs
+        "tx" .= map (marshalValue net) b.txs
       ]
 
-  marshalEncoding (net, ctx) b =
+  marshalEncoding net b =
     A.pairs $
       mconcat
         [ "hash" `A.pair` toEncoding b.hash,
@@ -2668,10 +2668,10 @@ instance MarshalJSON (Network, Ctx) BinfoBlock where
           "main_chain" `A.pair` A.bool b.main,
           "height" `A.pair` A.word32 b.height,
           "weight" `A.pair` A.word32 b.weight,
-          "tx" `A.pair` A.list (marshalEncoding (net, ctx)) b.txs
+          "tx" `A.pair` A.list (marshalEncoding net) b.txs
         ]
 
-  unmarshalValue (net, ctx) =
+  unmarshalValue net =
     A.withObject "BinfoBlock" $ \o -> do
       hash <- o .: "hash"
       version <- o .: "ver"
@@ -2688,19 +2688,19 @@ instance MarshalJSON (Network, Ctx) BinfoBlock where
       main <- o .: "main_chain"
       height <- o .: "height"
       weight <- o .: "weight"
-      txs <- o .: "tx" >>= mapM (unmarshalValue (net, ctx))
+      txs <- o .: "tx" >>= mapM (unmarshalValue net)
       return BinfoBlock {..}
 
-instance MarshalJSON (Network, Ctx) [BinfoBlock] where
-  marshalValue (net, ctx) blocks =
-    A.object ["blocks" .= map (marshalValue (net, ctx)) blocks]
+instance MarshalJSON Network [BinfoBlock] where
+  marshalValue net blocks =
+    A.object ["blocks" .= map (marshalValue net) blocks]
 
-  marshalEncoding (net, ctx) blocks =
-    A.pairs $ "blocks" `A.pair` A.list (marshalEncoding (net, ctx)) blocks
+  marshalEncoding net blocks =
+    A.pairs $ "blocks" `A.pair` A.list (marshalEncoding net) blocks
 
-  unmarshalValue (net, ctx) =
+  unmarshalValue net =
     A.withObject "blocks" $ \o ->
-      mapM (unmarshalValue (net, ctx)) =<< o .: "blocks"
+      mapM (unmarshalValue net) =<< o .: "blocks"
 
 -- | Transaction in the Blockchain.info format.
 data BinfoTx = BinfoTx
@@ -2744,8 +2744,8 @@ data BinfoTx = BinfoTx
   }
   deriving (Eq, Show, Generic, NFData)
 
-instance MarshalJSON (Network, Ctx) BinfoTx where
-  marshalValue (net, ctx) t =
+instance MarshalJSON Network BinfoTx where
+  marshalValue net t =
     A.object $
       [ "hash" .= t.txid,
         "ver" .= t.version,
@@ -2761,8 +2761,8 @@ instance MarshalJSON (Network, Ctx) BinfoTx where
         "time" .= t.timestamp,
         "block_index" .= t.blockIndex,
         "block_height" .= t.blockHeight,
-        "inputs" .= map (marshalValue (net, ctx)) t.inputs,
-        "out" .= map (marshalValue (net, ctx)) t.outputs
+        "inputs" .= map (marshalValue net) t.inputs,
+        "out" .= map (marshalValue net) t.outputs
       ]
         ++ bal
         ++ rbf
@@ -2773,7 +2773,7 @@ instance MarshalJSON (Network, Ctx) BinfoTx where
           Just (r, b) -> ["result" .= r, "balance" .= b]
       rbf = ["rbf" .= True | t.rbf]
 
-  marshalEncoding (net, ctx) t =
+  marshalEncoding net t =
     A.pairs $
       mconcat
         [ "hash" `A.pair` toEncoding t.txid,
@@ -2790,8 +2790,8 @@ instance MarshalJSON (Network, Ctx) BinfoTx where
           "time" `A.pair` A.word64 t.timestamp,
           "block_index" `A.pair` toEncoding t.blockIndex,
           "block_height" `A.pair` maybe A.null_ A.word32 t.blockHeight,
-          "inputs" `A.pair` A.list (marshalEncoding (net, ctx)) t.inputs,
-          "out" `A.pair` A.list (marshalEncoding (net, ctx)) t.outputs,
+          "inputs" `A.pair` A.list (marshalEncoding net) t.inputs,
+          "out" `A.pair` A.list (marshalEncoding net) t.outputs,
           bal,
           rbf
         ]
@@ -2803,7 +2803,7 @@ instance MarshalJSON (Network, Ctx) BinfoTx where
             "result" `A.pair` A.int64 r <> "balance" `A.pair` A.int64 b
       rbf = if t.rbf then "rbf" .= True else mempty
 
-  unmarshalValue (net, ctx) = A.withObject "BinfoTx" $ \o -> do
+  unmarshalValue net = A.withObject "BinfoTx" $ \o -> do
     txid <- o .: "hash"
     version <- o .: "ver"
     inputCount <- o .: "vin_sz"
@@ -2818,22 +2818,22 @@ instance MarshalJSON (Network, Ctx) BinfoTx where
     timestamp <- o .: "time"
     blockIndex <- o .: "block_index"
     blockHeight <- o .: "block_height"
-    inputs <- o .: "inputs" >>= mapM (unmarshalValue (net, ctx))
-    outputs <- o .: "out" >>= mapM (unmarshalValue (net, ctx))
+    inputs <- o .: "inputs" >>= mapM (unmarshalValue net)
+    outputs <- o .: "out" >>= mapM (unmarshalValue net)
     rbf <- o .:? "rbf" .!= False
     res <- o .:? "result"
     bal <- o .:? "balance"
     let balance = (,) <$> res <*> bal
     return BinfoTx {..}
 
-instance MarshalJSON (Network, Ctx) [BinfoTx] where
-  marshalValue (net, ctx) txs =
-    toJSON $ map (marshalValue (net, ctx)) txs
-  marshalEncoding (net, ctx) =
-    A.list (marshalEncoding (net, ctx))
-  unmarshalValue (net, ctx) =
+instance MarshalJSON Network [BinfoTx] where
+  marshalValue net txs =
+    toJSON $ map (marshalValue net) txs
+  marshalEncoding net =
+    A.list (marshalEncoding net)
+  unmarshalValue net =
     A.withArray "[BinfoTx]" $
-      fmap V.toList . mapM (unmarshalValue (net, ctx))
+      fmap V.toList . mapM (unmarshalValue net)
 
 -- | Transaction input in the Blockchain.info format.
 data BinfoTxInput = BinfoTxInput
@@ -2850,27 +2850,27 @@ data BinfoTxInput = BinfoTxInput
   }
   deriving (Eq, Show, Generic, NFData)
 
-instance MarshalJSON (Network, Ctx) BinfoTxInput where
-  marshalValue (net, ctx) i =
+instance MarshalJSON Network BinfoTxInput where
+  marshalValue net i =
     A.object
       [ "sequence" .= i.sequence,
         "witness" .= encodeHex i.witness,
         "script" .= encodeHex i.script,
         "index" .= i.index,
-        "prev_out" .= marshalValue (net, ctx) i.output
+        "prev_out" .= marshalValue net i.output
       ]
 
-  marshalEncoding (net, ctx) i =
+  marshalEncoding net i =
     A.pairs $
       mconcat
         [ "sequence" `A.pair` A.word32 i.sequence,
           "witness" `A.pair` hexEncoding (B.fromStrict i.witness),
           "script" `A.pair` hexEncoding (B.fromStrict i.script),
           "index" `A.pair` A.word32 i.index,
-          "prev_out" `A.pair` marshalEncoding (net, ctx) i.output
+          "prev_out" `A.pair` marshalEncoding net i.output
         ]
 
-  unmarshalValue (net, ctx) =
+  unmarshalValue net =
     A.withObject "BinfoTxInput" $ \o -> do
       sequence <- o .: "sequence"
       witness <-
@@ -2882,7 +2882,7 @@ instance MarshalJSON (Network, Ctx) BinfoTxInput where
       index <- o .: "index"
       output <-
         o .: "prev_out"
-          >>= unmarshalValue (net, ctx)
+          >>= unmarshalValue net
       return BinfoTxInput {..}
 
 -- | Transaction output in the Blockchain.info format.
@@ -2908,8 +2908,8 @@ data BinfoTxOutput = BinfoTxOutput
   }
   deriving (Eq, Show, Generic, NFData)
 
-instance MarshalJSON (Network, Ctx) BinfoTxOutput where
-  marshalValue (net, ctx) o =
+instance MarshalJSON Network BinfoTxOutput where
+  marshalValue net o =
     A.object $
       [ "type" .= o.typ,
         "spent" .= o.spent,
@@ -2922,11 +2922,11 @@ instance MarshalJSON (Network, Ctx) BinfoTxOutput where
         <> [ "addr" .= marshalValue net a
            | a <- maybeToList o.address
            ]
-        <> [ "xpub" .= marshalValue (net, ctx) x
+        <> [ "xpub" .= marshalValue net x
            | x <- maybeToList o.xpub
            ]
 
-  marshalEncoding (net, ctx) o =
+  marshalEncoding net o =
     A.pairs $
       mconcat $
         [ "type" `A.pair` A.int o.typ,
@@ -2940,11 +2940,11 @@ instance MarshalJSON (Network, Ctx) BinfoTxOutput where
           <> [ "addr" `A.pair` marshalEncoding net a
              | a <- maybeToList o.address
              ]
-          <> [ "xpub" `A.pair` marshalEncoding (net, ctx) x
+          <> [ "xpub" `A.pair` marshalEncoding net x
              | x <- maybeToList o.xpub
              ]
 
-  unmarshalValue (net, ctx) =
+  unmarshalValue net =
     A.withObject "BinfoTxOutput" $ \o -> do
       typ <- o .: "type"
       spent <- o .: "spent"
@@ -2954,7 +2954,7 @@ instance MarshalJSON (Network, Ctx) BinfoTxOutput where
       txidx <- o .: "tx_index"
       script <- maybe mzero return . decodeHex =<< o .: "script"
       address <- o .:? "addr" >>= mapM (unmarshalValue net)
-      xpub <- o .:? "xpub" >>= mapM (unmarshalValue (net, ctx))
+      xpub <- o .:? "xpub" >>= mapM (unmarshalValue net)
       return BinfoTxOutput {..}
 
 -- | Input that spends an output, in the Blockchain.info format.
@@ -3010,23 +3010,23 @@ instance Ord BinfoXPubPath where
           b.key.key.get
         )
 
-instance MarshalJSON (Network, Ctx) BinfoXPubPath where
-  marshalValue (net, ctx) p =
+instance MarshalJSON Network BinfoXPubPath where
+  marshalValue net p =
     A.object
-      [ "m" .= marshalValue (net, ctx) p.key,
+      [ "m" .= marshalValue net p.key,
         "path" .= ("M" ++ pathToStr p.deriv)
       ]
 
-  marshalEncoding (net, ctx) p =
+  marshalEncoding net p =
     A.pairs $
       mconcat
-        [ "m" `A.pair` marshalEncoding (net, ctx) p.key,
+        [ "m" `A.pair` marshalEncoding net p.key,
           "path" `A.pair` A.string ("M" ++ pathToStr p.deriv)
         ]
 
-  unmarshalValue (net, ctx) =
+  unmarshalValue net =
     A.withObject "BinfoXPubPath" $ \o -> do
-      key <- o .: "m" >>= unmarshalValue (net, ctx)
+      key <- o .: "m" >>= unmarshalValue net
       deriv <- o .: "path" >>= \t -> maybe (fail ("Not a derivation path: " <> t)) return (parseSoft t)
       return BinfoXPubPath {..}
 
@@ -3639,15 +3639,15 @@ data BinfoAddr
   deriving (Eq, Show, Generic, Hashable, NFData)
 
 -- | Parse addresses and xpubs separated by pipes or commas. Returns 'Nothing' if any is invalid.
-parseBinfoAddr :: Network -> Ctx -> Text -> Maybe [BinfoAddr]
-parseBinfoAddr _net _ctx "" = Just []
-parseBinfoAddr net ctx s =
+parseBinfoAddr :: Network -> Text -> Maybe [BinfoAddr]
+parseBinfoAddr _net "" = Just []
+parseBinfoAddr net s =
   mapM f $
     concatMap (filter (not . T.null) . T.splitOn ",") (T.splitOn "|" s)
   where
     f x =
       BinfoAddr <$> textToAddr net x
-        <|> BinfoXpub <$> xPubImport net ctx x
+        <|> BinfoXpub <$> xPubImport net x
 
 -- | Block header with its transactions in the Blockchain.info format.
 data BinfoHeader = BinfoHeader
@@ -3698,16 +3698,16 @@ newtype BinfoMempool = BinfoMempool {get :: [BinfoTx]}
   deriving stock (Eq, Show, Generic)
   deriving anyclass (NFData)
 
-instance MarshalJSON (Network, Ctx) BinfoMempool where
-  marshalValue (net, ctx) (BinfoMempool txs) =
-    A.object ["txs" .= map (marshalValue (net, ctx)) txs]
+instance MarshalJSON Network BinfoMempool where
+  marshalValue net (BinfoMempool txs) =
+    A.object ["txs" .= map (marshalValue net) txs]
 
-  marshalEncoding (net, ctx) (BinfoMempool txs) =
-    A.pairs $ A.pair "txs" $ A.list (marshalEncoding (net, ctx)) txs
+  marshalEncoding net (BinfoMempool txs) =
+    A.pairs $ A.pair "txs" $ A.list (marshalEncoding net) txs
 
-  unmarshalValue (net, ctx) =
+  unmarshalValue net =
     A.withObject "BinfoMempool" $ \o ->
-      BinfoMempool <$> (mapM (unmarshalValue (net, ctx)) =<< o .: "txs")
+      BinfoMempool <$> (mapM (unmarshalValue net) =<< o .: "txs")
 
 -- | List of short block information.
 newtype BinfoBlockInfos = BinfoBlockInfos {get :: [BinfoBlockInfo]}

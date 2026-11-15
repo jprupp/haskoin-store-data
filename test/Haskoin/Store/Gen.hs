@@ -58,11 +58,11 @@ instance Arbitrary BlockRef where
 instance Arbitrary Prev where
   arbitrary = Prev <$> arbitraryBS1 <*> arbitrary
 
-arbitraryTxData :: Ctx -> Gen TxData
-arbitraryTxData ctx =
+arbitraryTxData :: Gen TxData
+arbitraryTxData =
   TxData
     <$> arbitrary
-    <*> arbitraryTx btc ctx
+    <*> arbitraryTx btc
     <*> arbitrary
     <*> arbitrary
     <*> arbitrary
@@ -182,8 +182,8 @@ instance Arbitrary RejectCode where
         RejectCheckpoint
       ]
 
-arbitraryXPubSpec :: Network -> Ctx -> Gen XPubSpec
-arbitraryXPubSpec net ctx = XPubSpec <$> arbitraryXPubKey ctx <*> arbitraryDeriveType net
+arbitraryXPubSpec :: Network -> Gen XPubSpec
+arbitraryXPubSpec net = XPubSpec <$> arbitraryXPubKey <*> arbitraryDeriveType net
 
 arbitraryDeriveType :: Network -> Gen DeriveType
 arbitraryDeriveType net =
@@ -268,13 +268,13 @@ instance Arbitrary Event where
       ]
 
 -- | A command for the events of a network, of every kind.
-arbitraryEventCommand :: Network -> Ctx -> Gen EventCommand
-arbitraryEventCommand net ctx =
+arbitraryEventCommand :: Network -> Gen EventCommand
+arbitraryEventCommand net =
   oneof
     [ EventWatch <$> listOf (arbitraryAddress net),
       EventUnwatch <$> listOf (arbitraryAddress net),
-      EventWatchXPub <$> arbitraryXPubSpec net ctx,
-      EventUnwatchXPub <$> arbitraryXPubSpec net ctx,
+      EventWatchXPub <$> arbitraryXPubSpec net,
+      EventUnwatchXPub <$> arbitraryXPubSpec net,
       EventFilterLoad <$> arbitraryBloomFilter,
       EventFilterAdd . B.pack <$> (choose (0, maxFilterAddSize) >>= vector),
       return EventFilterClear,
@@ -307,43 +307,43 @@ instance Arbitrary BinfoTxId where
         BinfoTxIdIndex <$> arbitrary
       ]
 
-arbitraryBinfoMultiAddr :: Network -> Ctx -> Gen BinfoMultiAddr
-arbitraryBinfoMultiAddr net ctx = do
-  b <- arbitraryBinfoBalance net ctx
+arbitraryBinfoMultiAddr :: Network -> Gen BinfoMultiAddr
+arbitraryBinfoMultiAddr net = do
+  b <- arbitraryBinfoBalance net
   let addresses = [b]
   wallet <- arbitrary
-  txs <- small (arbitraryBinfoTx net ctx)
+  txs <- small (arbitraryBinfoTx net)
   info <- arbitrary
   recommendFee <- arbitrary
   let cashAddr = isJust net.cashAddrPrefix
   return BinfoMultiAddr {..}
 
-arbitraryBinfoRawAddr :: Network -> Ctx -> Gen BinfoRawAddr
-arbitraryBinfoRawAddr net ctx = do
+arbitraryBinfoRawAddr :: Network -> Gen BinfoRawAddr
+arbitraryBinfoRawAddr net = do
   address <-
     oneof
       [ BinfoAddr <$> arbitraryAddress net,
-        BinfoXpub <$> arbitraryXPubKey ctx
+        BinfoXpub <$> arbitraryXPubKey
       ]
   balance <- arbitrary
   ntx <- arbitrary
   utxo <- arbitrary
   received <- arbitrary
   sent <- arbitrary
-  txs <- small (arbitraryBinfoTx net ctx)
+  txs <- small (arbitraryBinfoTx net)
   return $ BinfoRawAddr {..}
 
 instance Arbitrary BinfoShortBal where
   arbitrary = BinfoShortBal <$> arbitrary <*> arbitrary <*> arbitrary
 
-arbitraryBinfoBalance :: Network -> Ctx -> Gen BinfoBalance
-arbitraryBinfoBalance net ctx = do
+arbitraryBinfoBalance :: Network -> Gen BinfoBalance
+arbitraryBinfoBalance net = do
   address <- arbitraryAddress net
   txs <- arbitrary
   received <- arbitrary
   sent <- arbitrary
   balance <- arbitrary
-  xpub <- arbitraryXPubKey ctx
+  xpub <- arbitraryXPubKey
   external <- arbitrary
   change <- arbitrary
   elements [BinfoAddrBalance {..}, BinfoXPubBalance {..}]
@@ -357,8 +357,8 @@ instance Arbitrary BinfoWallet where
     sent <- arbitrary
     return BinfoWallet {..}
 
-arbitraryBinfoBlock :: Network -> Ctx -> Gen BinfoBlock
-arbitraryBinfoBlock net ctx = do
+arbitraryBinfoBlock :: Network -> Gen BinfoBlock
+arbitraryBinfoBlock net = do
   hash <- arbitraryBlockHash
   version <- arbitrary
   prev <- arbitraryBlockHash
@@ -374,15 +374,15 @@ arbitraryBinfoBlock net ctx = do
   main <- arbitrary
   height <- arbitrary
   weight <- arbitrary
-  txs <- small (arbitraryBinfoTx net ctx)
+  txs <- small (arbitraryBinfoTx net)
   return BinfoBlock {..}
 
-arbitraryBinfoTx :: Network -> Ctx -> Gen BinfoTx
-arbitraryBinfoTx net ctx = do
+arbitraryBinfoTx :: Network -> Gen BinfoTx
+arbitraryBinfoTx net = do
   txid <- arbitraryTxHash
   version <- arbitrary
-  inputs <- small1 (arbitraryBinfoTxInput net ctx)
-  outputs <- small1 (arbitraryBinfoTxOutput net ctx)
+  inputs <- small1 (arbitraryBinfoTxInput net)
+  outputs <- small1 (arbitraryBinfoTxOutput net)
   let inputCount = fromIntegral $ length inputs
       outputCount = fromIntegral $ length outputs
   size <- arbitrary
@@ -399,17 +399,17 @@ arbitraryBinfoTx net ctx = do
   balance <- arbitrary
   return BinfoTx {..}
 
-arbitraryBinfoTxInput :: Network -> Ctx -> Gen BinfoTxInput
-arbitraryBinfoTxInput net ctx = do
+arbitraryBinfoTxInput :: Network -> Gen BinfoTxInput
+arbitraryBinfoTxInput net = do
   sequence <- arbitrary
   witness <- B.pack <$> listOf arbitrary
   script <- B.pack <$> listOf arbitrary
   index <- arbitrary
-  output <- arbitraryBinfoTxOutput net ctx
+  output <- arbitraryBinfoTxOutput net
   return BinfoTxInput {..}
 
-arbitraryBinfoTxOutput :: Network -> Ctx -> Gen BinfoTxOutput
-arbitraryBinfoTxOutput net ctx = do
+arbitraryBinfoTxOutput :: Network -> Gen BinfoTxOutput
+arbitraryBinfoTxOutput net = do
   typ <- arbitrary
   spent <- arbitrary
   value <- arbitrary
@@ -418,7 +418,7 @@ arbitraryBinfoTxOutput net ctx = do
   script <- B.pack <$> listOf arbitrary
   spenders <- arbitrary
   address <- arbitraryMaybe (arbitraryAddress net)
-  xpub <- arbitraryMaybe $ arbitraryBinfoXPubPath net ctx
+  xpub <- arbitraryMaybe $ arbitraryBinfoXPubPath net
   return BinfoTxOutput {..}
 
 instance Arbitrary BinfoSpender where
@@ -427,9 +427,9 @@ instance Arbitrary BinfoSpender where
     input <- arbitrary
     return BinfoSpender {..}
 
-arbitraryBinfoXPubPath :: Network -> Ctx -> Gen BinfoXPubPath
-arbitraryBinfoXPubPath _net ctx = do
-  key <- arbitraryXPubKey ctx
+arbitraryBinfoXPubPath :: Network -> Gen BinfoXPubPath
+arbitraryBinfoXPubPath _net = do
+  key <- arbitraryXPubKey
   deriv <- arbitrarySoftPath
   return BinfoXPubPath {..}
 
@@ -485,20 +485,20 @@ instance Arbitrary BinfoHistory where
     fee <- arbitrary
     return BinfoHistory {..}
 
-arbitraryBinfoUnspent :: Network -> Ctx -> Gen BinfoUnspent
-arbitraryBinfoUnspent net ctx = do
+arbitraryBinfoUnspent :: Network -> Gen BinfoUnspent
+arbitraryBinfoUnspent net = do
   txid <- arbitraryTxHash
   index <- arbitrary
   script <- B.pack <$> listOf arbitrary
   value <- arbitrary
   confirmations <- arbitrary
   txidx <- arbitrary
-  xpub <- arbitraryMaybe $ arbitraryBinfoXPubPath net ctx
+  xpub <- arbitraryMaybe $ arbitraryBinfoXPubPath net
   return BinfoUnspent {..}
 
-arbitraryBinfoUnspents :: Network -> Ctx -> Gen BinfoUnspents
-arbitraryBinfoUnspents net ctx =
-  BinfoUnspents <$> small (arbitraryBinfoUnspent net ctx)
+arbitraryBinfoUnspents :: Network -> Gen BinfoUnspents
+arbitraryBinfoUnspents net =
+  BinfoUnspents <$> small (arbitraryBinfoUnspent net)
 
 instance Arbitrary BinfoHeader where
   arbitrary =
@@ -509,9 +509,9 @@ instance Arbitrary BinfoHeader where
       <*> arbitrary
       <*> arbitrary
 
-arbitraryBinfoMempool :: Network -> Ctx -> Gen BinfoMempool
-arbitraryBinfoMempool net ctx =
-  BinfoMempool <$> small (arbitraryBinfoTx net ctx)
+arbitraryBinfoMempool :: Network -> Gen BinfoMempool
+arbitraryBinfoMempool net =
+  BinfoMempool <$> small (arbitraryBinfoTx net)
 
 instance Arbitrary BinfoBlockInfos where
   arbitrary = BinfoBlockInfos <$> small arbitrary

@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)
 
+## [3.0.0] - 2026-11-14
+
+The context of libsecp256k1 (`Ctx`) is gone from the whole API. It is
+global now, kept inside secp256k1-haskell 3.0.0, and haskoin-core 2.0.0
+no longer takes it. This release follows them. Every program that uses
+this package has to change, but only by deleting: no name was removed or
+renamed, and no JSON or binary encoding changed.
+
+### Changed
+- **Breaking: depends on haskoin-core 2.0.0** and so on secp256k1-haskell
+  3.0.0.
+- **Breaking: no function takes a `Ctx`.** Each lost that argument and
+  kept the order of the others:
+  - the client: `apiCall` and `apiBatch`;
+  - the requests: `queryPath`, `pathEncodes`, and the methods
+    `encodeParam` and `parseParam` of `Param` and `parseResponse` of
+    `ApiResponse`;
+  - the data: `toTransaction`, `toTransactionWithId` and
+    `parseBinfoAddr`.
+- **Breaking: the JSON instances that were `MarshalJSON (Network, Ctx)`
+  are `MarshalJSON Network`**: `EventCommand`, `BinfoMultiAddr`,
+  `BinfoRawAddr`, `BinfoBalance`, `[BinfoBalance]`, `BinfoUnspent`,
+  `BinfoUnspents`, `BinfoBlock`, `[BinfoBlock]`, `BinfoTx`, `[BinfoTx]`,
+  `BinfoTxInput`, `BinfoTxOutput`, `BinfoXPubPath` and `BinfoMempool`.
+  The JSON itself is the same.
+
+### Migrating
+- Delete `withContext`, `createContext` and every `ctx` you passed to this
+  package: `apiCall ctx cfg req` becomes `apiCall cfg req`, and
+  `toTransaction net ctx td` becomes `toTransaction net td`.
+- Where you gave a pair to a JSON function, give the network:
+  `marshalValue (net, ctx) x` becomes `marshalValue net x`, and the same
+  for `marshalEncoding`, `unmarshalValue`, `marshalJSON` and
+  `unmarshalJSON`.
+- In an instance of `Param` or `ApiResponse` of your own, drop the context
+  from the arguments of the methods.
+- For your own use of haskoin-core, see the "Migrating" section of its
+  changelog for 2.0.0.
+
 ## [2.0.2] - 2026-11-14
 
 ### Added
