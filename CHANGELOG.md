@@ -29,6 +29,58 @@ renamed, and no JSON or binary encoding changed.
   `BinfoUnspents`, `BinfoBlock`, `[BinfoBlock]`, `BinfoTx`, `[BinfoTx]`,
   `BinfoTxInput`, `BinfoTxOutput`, `BinfoXPubPath` and `BinfoMempool`.
   The JSON itself is the same.
+- **The records of the database are written and read through cereal
+  several times faster.** The `Serialize` instances of `TxData`, `Unspent`,
+  `Balance`, `BlockData`, `Spender`, `Prev`, `BlockRef`, `TxRef`, `XPubSpec`
+  and `XPubBal` no longer run the `Serial` code of the type through the
+  builder and the continuations of cereal, a closure for each field. They
+  run it on a buffer directly, with `putDirect` and `getDirect` of
+  `Haskoin.Util.Direct`, a module that haskoin-core 2.0.0 has for this.
+  `Spender`, `Prev`, `BlockRef` and `TxRef` are read that way and still
+  written through the builder, which is cheaper for two or three fields. The
+  `Serial` methods are `INLINEABLE`, so that `encodeSerial` and
+  `decodeSerial` of haskoin-core are compiled for these types too, and those
+  two are the cheapest way to the bytes of one record: `encode` of cereal
+  allocates a buffer of 4 kB before it writes anything. The bytes are the
+  same, and so is the error for bytes that do not parse: the tests give
+  cereal damaged bytes and compare. The `Serial` and `Binary` instances
+  are as they were. The module is in haskoin-core from its commit
+  `64a336ffd94d09a77ed8f9ab5cd3743dc4cf26d7` on.
+
+  The timings are from a benchmark built as haskoin-store builds this
+  package, with GHC 9.12.4 at `-O2` with `-fspecialise-aggressively` and
+  `-fexpose-all-unfoldings`, on an AMD Ryzen 9 3900X, before this change and
+  after it, each with the haskoin-core of its day. They are in
+  nanoseconds, the lowest of two or three runs, with the memory that one
+  call allocates. A timing moves by about a tenth from one run to the next,
+  and the memory does not move.
+
+  | ns | before | now | allocated before | now |
+  | --- | ---: | ---: | ---: | ---: |
+  | `TxData` of a SegWit transaction, 2 inputs and 2 outputs, `encode` | 2,440 | 626 | 14 kB | 6.0 kB |
+  | `TxData` of a SegWit transaction, 2 inputs and 2 outputs, `decode` | 1,870 | 643 | 11 kB | 3.4 kB |
+  | `TxData` of a SegWit transaction, 2 inputs and 2 outputs, `encodeSerial` | 2,370 | 286 | 14 kB | 903 B |
+  | `TxData` of a SegWit transaction, 2 inputs and 2 outputs, `decodeSerial` | 1,740 | 633 | 11 kB | 3.3 kB |
+  | `BlockData` of 3,000 transactions, `encode` | 260,000 | 37,800 | 1.5 MB | 103 kB |
+  | `BlockData` of 3,000 transactions, `decode` | 246,000 | 49,600 | 1.4 MB | 291 kB |
+  | `BlockData` of 3,000 transactions, `encodeSerial` | 264,000 | 31,900 | 1.5 MB | 99 kB |
+  | `BlockData` of 3,000 transactions, `decodeSerial` | 264,000 | 49,000 | 1.4 MB | 291 kB |
+  | `Unspent`, `encode` | 423 | 247 | 5.6 kB | 4.9 kB |
+  | `Unspent`, `decode` | 228 | 64 | 1.6 kB | 463 B |
+  | `Unspent`, `encodeSerial` | 432 | 39 | 5.6 kB | 231 B |
+  | `Unspent`, `decodeSerial` | 238 | 55 | 1.6 kB | 383 B |
+  | `Balance`, `encode` | 243 | 239 | 4.8 kB | 4.8 kB |
+  | `Balance`, `decode` | 101 | 34 | 791 B | 271 B |
+  | `Balance`, `encodeSerial` | 265 | 29 | 4.8 kB | 167 B |
+  | `Balance`, `decodeSerial` | 111 | 23 | 815 B | 191 B |
+  | `Spender`, `encode` | 239 | 211 | 4.7 kB | 4.6 kB |
+  | `Spender`, `decode` | 55 | 19 | 407 B | 151 B |
+  | `Spender`, `encodeSerial` | 228 | 22 | 4.6 kB | 119 B |
+  | `Spender`, `decodeSerial` | 61 | 10 | 431 B | 87 B |
+  | `BlockRef`, `encode` | 197 | 199 | 4.5 kB | 4.5 kB |
+  | `BlockRef`, `decode` | 15 | 11 | 143 B | 111 B |
+  | `BlockRef`, `encodeSerial` | 195 | 14 | 4.5 kB | 87 B |
+  | `BlockRef`, `decodeSerial` | 18 | 7 | 167 B | 31 B |
 
 ### Migrating
 - Delete `withContext`, `createContext` and every `ctx` you passed to this

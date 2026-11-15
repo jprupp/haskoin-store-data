@@ -83,7 +83,8 @@ stack test
 The tests check every type by law: JSON round-trips, the fast encoders
 write the same JSON as `toJSON`, the client reads what the server writes,
 the binary encodings of the database round-trip and agree between Serial,
-cereal and binary, and the format of the basic types is pinned.
+cereal and binary, on good bytes and on bad ones, and the format of the basic
+types is pinned.
 
 ## Versions
 

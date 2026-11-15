@@ -21,6 +21,22 @@
 --   (the @marshal@ functions of 'MarshalJSON'), since the text form of an
 --   address depends on the network.
 --
+-- The binary encoding is written once for each type, in its 'Serial'
+-- instance, for any monad. The server reads a record from its database for
+-- every transaction, balance and unspent output that it returns, and writes
+-- one for each that it imports, so the 'Serialize' instances of these types
+-- do not run that code through the builder and the continuations of cereal:
+-- they run it on a buffer directly, with 'putDirect' and 'getDirect' of
+-- "Haskoin.Util.Direct", which give the same bytes and the same errors. The
+-- smallest records, of two or three fields, are only read that way: the
+-- builder writes them for less than a buffer of their own would cost. At
+-- @-O2@, a transaction record is written in a quarter of the time that way
+-- and read in a third of it. To write or read a record on its own,
+-- 'encodeSerial' and 'decodeSerial' of haskoin-core are cheaper still,
+-- because @encode@ of cereal allocates a buffer of 4 kB before it writes
+-- anything. The 'Serial' methods are marked @INLINEABLE@ so that GHC can
+-- compile them for those functions wherever they are called.
+--
 -- Types whose names start with @Binfo@ belong to the API compatible with
 -- Blockchain.info.
 -- These types live in their own package, @haskoin-store-data@, so that clients of
@@ -198,6 +214,7 @@ import Data.Vector qualified as V
 import Data.Word (Word32, Word64, Word8)
 import GHC.Generics (Generic)
 import Haskoin
+import Haskoin.Util.Direct (getDirect, putDirect)
 import Text.Read (readMaybe)
 
 -- | Type of the addresses derived from an extended public key.
@@ -236,6 +253,8 @@ deriveTypeToText DeriveP2SH = "compat"
 deriveTypeToText DeriveP2WPKH = "segwit"
 
 instance Serial DeriveType where
+  {-# INLINEABLE serialize #-}
+  {-# INLINEABLE deserialize #-}
   serialize DeriveNormal = putWord8 0x00
   serialize DeriveP2SH = putWord8 0x01
   serialize DeriveP2WPKH = putWord8 0x02
@@ -271,6 +290,8 @@ instance Hashable XPubSpec where
   hashWithSalt i = hashWithSalt i . (.key.key)
 
 instance Serial XPubSpec where
+  {-# INLINEABLE serialize #-}
+  {-# INLINEABLE deserialize #-}
   serialize XPubSpec {key = k, deriv = t} = do
     putWord8 k.depth
     serialize k.parent
@@ -291,8 +312,8 @@ instance Serial XPubSpec where
     return XPubSpec {key = XPubKey {..}, deriv}
 
 instance Serialize XPubSpec where
-  put = serialize
-  get = deserialize
+  put x = putDirect (serialize x)
+  get = getDirect deserialize
 
 instance Binary XPubSpec where
   put = serialize
@@ -307,10 +328,12 @@ type BlockPos = Word32
 -- | Binary such that ordering is inverted.
 putUnixTime :: (MonadPut m) => Word64 -> m ()
 putUnixTime w = putWord64be $ maxBound - w
+{-# INLINE putUnixTime #-}
 
 -- | Inverse of 'putUnixTime'.
 getUnixTime :: (MonadGet m) => m Word64
 getUnixTime = (maxBound -) <$> getWord64be
+{-# INLINE getUnixTime #-}
 
 -- | Reference to a block where a transaction is stored.
 data BlockRef
@@ -329,6 +352,8 @@ data BlockRef
 
 -- | Serial entities will sort in reverse order.
 instance Serial BlockRef where
+  {-# INLINEABLE serialize #-}
+  {-# INLINEABLE deserialize #-}
   serialize MemRef {timestamp = t} = do
     putWord8 0x00
     putUnixTime t
@@ -351,7 +376,7 @@ instance Serial BlockRef where
 
 instance Serialize BlockRef where
   put = serialize
-  get = deserialize
+  get = getDirect deserialize
 
 instance Binary BlockRef where
   put = serialize
@@ -401,6 +426,8 @@ data TxRef = TxRef
   deriving (Show, Eq, Ord, Generic, Hashable, NFData)
 
 instance Serial TxRef where
+  {-# INLINEABLE serialize #-}
+  {-# INLINEABLE deserialize #-}
   serialize (TxRef b h) = do
     serialize b
     serialize h
@@ -414,7 +441,7 @@ instance Binary TxRef where
 
 instance Serialize TxRef where
   put = serialize
-  get = deserialize
+  get = getDirect deserialize
 
 instance ToJSON TxRef where
   toJSON x =
@@ -455,6 +482,8 @@ data Balance = Balance
   deriving (Show, Read, Eq, Ord, Generic, Hashable, NFData)
 
 instance Serial Balance where
+  {-# INLINEABLE serialize #-}
+  {-# INLINEABLE deserialize #-}
   serialize b = do
     serialize b.address
     putWord64be b.confirmed
@@ -477,8 +506,8 @@ instance Binary Balance where
   get = deserialize
 
 instance Serialize Balance where
-  put = serialize
-  get = deserialize
+  put x = putDirect (serialize x)
+  get = getDirect deserialize
 
 -- | Balance of an address that was never used.
 zeroBalance :: Address -> Balance
@@ -552,6 +581,8 @@ data Unspent = Unspent
   deriving (Show, Eq, Ord, Generic, Hashable, NFData)
 
 instance Serial Unspent where
+  {-# INLINEABLE serialize #-}
+  {-# INLINEABLE deserialize #-}
   serialize u = do
     serialize u.block
     serialize u.outpoint
@@ -572,8 +603,8 @@ instance Binary Unspent where
   get = deserialize
 
 instance Serialize Unspent where
-  put = serialize
-  get = deserialize
+  put x = putDirect (serialize x)
+  get = getDirect deserialize
 
 instance Coin Unspent where
   coinValue = (.value)
@@ -687,6 +718,8 @@ data BlockData = BlockData
   deriving (Show, Read, Eq, Ord, Generic, Hashable, NFData)
 
 instance Serial BlockData where
+  {-# INLINEABLE serialize #-}
+  {-# INLINEABLE deserialize #-}
   serialize b = do
     putWord32be b.height
     serialize b.main
@@ -713,8 +746,8 @@ instance Serial BlockData where
     return BlockData {..}
 
 instance Serialize BlockData where
-  put = serialize
-  get = deserialize
+  put x = putDirect (serialize x)
+  get = getDirect deserialize
 
 instance Binary BlockData where
   put = serialize
@@ -912,6 +945,8 @@ data Spender = Spender
   deriving (Show, Read, Eq, Ord, Generic, Hashable, NFData)
 
 instance Serial Spender where
+  {-# INLINEABLE serialize #-}
+  {-# INLINEABLE deserialize #-}
   serialize s = do
     serialize s.txid
     putWord32be s.index
@@ -919,7 +954,7 @@ instance Serial Spender where
 
 instance Serialize Spender where
   put = serialize
-  get = deserialize
+  get = getDirect deserialize
 
 instance Binary Spender where
   put = serialize
@@ -996,6 +1031,8 @@ data Prev = Prev
   deriving (Show, Eq, Ord, Generic, Hashable, NFData)
 
 instance Serial Prev where
+  {-# INLINEABLE serialize #-}
+  {-# INLINEABLE deserialize #-}
   serialize p = do
     putLengthBytes p.script
     putWord64be p.value
@@ -1010,7 +1047,7 @@ instance Binary Prev where
 
 instance Serialize Prev where
   put = serialize
-  get = deserialize
+  get = getDirect deserialize
 
 -- | Input with information about the output it spends, which is missing for a coinbase.
 toInput :: Network -> TxIn -> Maybe Prev -> WitnessStack -> StoreInput
@@ -1062,6 +1099,8 @@ data TxData = TxData
   deriving (Show, Eq, Ord, Generic, NFData)
 
 instance Serial TxData where
+  {-# INLINEABLE serialize #-}
+  {-# INLINEABLE deserialize #-}
   serialize t = do
     serialize t.block
     serialize t.tx
@@ -1081,8 +1120,8 @@ instance Serial TxData where
     return TxData {..}
 
 instance Serialize TxData where
-  put = serialize
-  get = deserialize
+  put x = putDirect (serialize x)
+  get = getDirect deserialize
 
 instance Binary TxData where
   put = serialize
@@ -1385,6 +1424,8 @@ data XPubBal = XPubBal
   deriving (Show, Ord, Eq, Generic, NFData)
 
 instance Serial XPubBal where
+  {-# INLINEABLE serialize #-}
+  {-# INLINEABLE deserialize #-}
   serialize b = do
     putList putWord32be b.path
     serialize b.balance
@@ -1394,8 +1435,8 @@ instance Serial XPubBal where
     return XPubBal {..}
 
 instance Serialize XPubBal where
-  put = serialize
-  get = deserialize
+  put x = putDirect (serialize x)
+  get = getDirect deserialize
 
 instance Binary XPubBal where
   put = serialize

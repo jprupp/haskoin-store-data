@@ -20,6 +20,8 @@ import Data.Aeson.Encoding (encodingToLazyByteString)
 import Data.Aeson.Types (parseMaybe)
 import Data.Binary (Binary)
 import Data.Binary qualified as Binary
+import Data.ByteString (ByteString)
+import Data.ByteString qualified as B
 import Data.ByteString.Lazy qualified as BL
 import Data.Bytes.Get (runGetS)
 import Data.Bytes.Put (runPutS)
@@ -29,24 +31,49 @@ import Data.Serialize (Serialize)
 import Data.Serialize qualified as Cereal
 import Data.Typeable (Typeable, typeRep)
 import Haskoin (Network (..), allNets)
-import Haskoin.Util (MarshalJSON (..))
+import Haskoin.Util (MarshalJSON (..), decodeSerial, encodeSerial)
 import Test.Hspec (Spec)
 import Test.Hspec.QuickCheck (prop)
-import Test.QuickCheck (Gen, counterexample, elements, forAll, (.&&.), (===))
+import Test.QuickCheck (Gen, arbitrary, choose, counterexample, elements, forAll, oneof, (.&&.), (===))
 
 -- | Name of the type of a generator, for the description of a test.
 name :: forall a. (Typeable a) => Gen a -> String
 name _ = show (typeRep (Proxy @a))
 
 -- | The value comes back from its bytes, and the three binary classes
--- ('Serial', cereal and binary) agree on the bytes.
+-- ('Serial', cereal and binary) agree on the bytes, as do 'encodeSerial' and
+-- 'decodeSerial'.
+--
+-- The reference is the 'Serial' instance run through cereal with 'runPutS'
+-- and 'runGetS'. The cereal instances and the two functions do not run it
+-- that way: they write and read on a buffer directly, for speed. So the
+-- law also gives cereal bytes that are cut short, changed or followed by
+-- others, and wants the result of the reference for them, error included.
 binaryLaws :: forall a. (Eq a, Show a, Typeable a, Serial a, Serialize a, Binary a) => Gen a -> Spec
 binaryLaws g = prop (name g) . forAll g $ \x ->
   let bytes = runPutS (serialize x)
-   in runGetS deserialize bytes === Right x
+      reference :: ByteString -> Either String a
+      reference = runGetS deserialize
+   in reference bytes === Right x
         .&&. Cereal.encode x === bytes
         .&&. BL.toStrict (Binary.encode x) === bytes
+        .&&. encodeSerial x === bytes
         .&&. Cereal.decode bytes === Right x
+        .&&. Binary.decode (BL.fromStrict bytes) === x
+        .&&. decodeSerial bytes === Right x
+        .&&. forAll (damaged bytes) (\bad -> Cereal.decode bad === reference bad)
+
+-- | Bytes that are not what was written: cut short, with a byte changed, or
+-- with a byte after them.
+damaged :: ByteString -> Gen ByteString
+damaged bytes =
+  oneof
+    [ (`B.take` bytes) <$> choose (0, B.length bytes),
+      change <$> choose (0, max 0 (B.length bytes - 1)) <*> arbitrary,
+      B.snoc bytes <$> arbitrary
+    ]
+  where
+    change i w = B.take i bytes <> B.pack [w | i < B.length bytes] <> B.drop (i + 1) bytes
 
 -- | The value comes back from its JSON, and the fast encoder ('A.toEncoding')
 -- writes the same JSON as 'A.toJSON': the two are written by hand and could
