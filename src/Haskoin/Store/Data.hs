@@ -2027,8 +2027,10 @@ data Except
     ServerTimeout
   | -- | the request asks for too much (413)
     RequestTooLarge
-  | -- | the server is one of a fleet and does not have the block that the
-    -- fleet answers from; another server of the fleet does (503)
+  | -- | the server is not synchronized with the network: it does not have
+    -- the block that it would answer from yet (503). The name and the
+    -- code, @behind-fleet@, are older than the message, and kept so that
+    -- clients and load balancers that look for them still find them.
     BehindFleet
   deriving (Show, Eq, Ord, Generic, NFData)
 
@@ -2073,7 +2075,7 @@ instance ToJSON Except where
           ]
         BehindFleet ->
           [ "error" .= String "behind-fleet",
-            "message" .= String "This server is behind the other servers of its fleet"
+            "message" .= String "This server is not synchronized with the network"
           ]
 
 instance FromJSON Except where

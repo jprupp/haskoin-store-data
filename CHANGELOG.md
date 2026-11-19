@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)
 
+## [3.0.1] - 2026-11-19
+
+### Changed
+- **The message of `BehindFleet` says what an operator sees:** "This
+  server is not synchronized with the network", instead of "This server is
+  behind the other servers of its fleet". A store answers it whenever it
+  does not have the block to answer from, also when it runs alone, so the
+  fleet was the wrong thing to name. The error code, `behind-fleet`, and
+  the constructor stay as they were, for clients and load balancers that
+  look for them.
+
 ## [3.0.0] - 2026-11-15
 
 The context of libsecp256k1 (`Ctx`) is gone from the whole API. It is
