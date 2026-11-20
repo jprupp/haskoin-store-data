@@ -79,7 +79,8 @@ obvious, and no long chains of commands joined with `&&` or `;` on one line.
 
 Build the documentation with `stack haddock --no-haddock-deps` and make sure it
 has no warnings about broken markup. CI builds it too, both with the OS
-libraries and with `stack --nix`. Format with `scripts/format` (ormolu).
+libraries and with `stack --nix`. Format with `haskell-format`
+(ormolu, from [jprupp/tools](https://github.com/jprupp/tools)).
 
 List the lines of 120 columns or more with
 `git ls-files '*.hs' '*.yaml' '*.cabal' '*.md' | xargs grep -n '.\{120,\}'`,
