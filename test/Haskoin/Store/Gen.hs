@@ -217,6 +217,8 @@ arbitraryTokenBalance net =
     <*> arbitrary
     <*> arbitrary
     <*> arbitrary
+    <*> arbitrary
+    <*> arbitrary
 
 arbitraryUnspent :: Network -> Gen Unspent
 arbitraryUnspent net =

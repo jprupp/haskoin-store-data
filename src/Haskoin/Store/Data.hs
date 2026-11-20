@@ -542,10 +542,15 @@ nullBalance _ = False
 -- Bitcoin Cash).
 --
 -- It is the counterpart of t'Balance' for the tokens of a category:
--- @confirmed@ plus @unconfirmed@ is the fungible amount the address holds
--- now, counting the mempool, as in t'Balance'. The amounts are in tokens of
--- the category, not in satoshis; the coins of the same outputs are in the
--- address's t'Balance', as those of any output.
+-- @confirmedTokens@ plus @unconfirmedTokens@ is the fungible amount the
+-- address holds now, counting the mempool, as in t'Balance'. The amounts are
+-- in tokens of the category, not in satoshis; the coins of the same outputs
+-- are in the address's t'Balance', as those of any output.
+--
+-- The fields have names of their own, not those of t'Balance': a record
+-- update that names only fields that both types have would be ambiguous,
+-- and code that updates a t'Balance' would stop compiling. The JSON keys
+-- are those of t'Balance'.
 --
 -- The amounts are written as strings in JSON, as in
 -- 'Haskoin.Script.CashToken.TokenData': a category can have up to
@@ -557,14 +562,20 @@ data TokenBalance = TokenBalance
     -- | category of the tokens
     category :: !TxHash,
     -- | fungible tokens in outputs in blocks that are not being spent
-    confirmed :: !Word64,
+    confirmedTokens :: !Word64,
     -- | fungible tokens that the mempool adds, as in t'Balance'
-    unconfirmed :: !Word64,
+    unconfirmedTokens :: !Word64,
     -- | number of non-fungible tokens, counting the mempool
     nfts :: !Word64,
     -- | number of unspent outputs that hold tokens of the category, counting
     -- the mempool
-    utxo :: !Word64
+    tokenUtxo :: !Word64,
+    -- | number of transactions that moved tokens of the category to or from
+    -- the address, counting the mempool
+    tokenTxs :: !Word64,
+    -- | fungible tokens of the category that all the outputs of the address
+    -- ever received, counting the mempool and spent outputs
+    receivedTokens :: !Word64
   }
   deriving (Show, Read, Eq, Ord, Generic, Hashable, NFData)
 
@@ -574,18 +585,22 @@ instance Serial TokenBalance where
   serialize b = do
     serialize b.address
     serialize b.category
-    putWord64be b.confirmed
-    putWord64be b.unconfirmed
+    putWord64be b.confirmedTokens
+    putWord64be b.unconfirmedTokens
     putWord64be b.nfts
-    putWord64be b.utxo
+    putWord64be b.tokenUtxo
+    putWord64be b.tokenTxs
+    putWord64be b.receivedTokens
 
   deserialize = do
     address <- deserialize
     category <- deserialize
-    confirmed <- getWord64be
-    unconfirmed <- getWord64be
+    confirmedTokens <- getWord64be
+    unconfirmedTokens <- getWord64be
     nfts <- getWord64be
-    utxo <- getWord64be
+    tokenUtxo <- getWord64be
+    tokenTxs <- getWord64be
+    receivedTokens <- getWord64be
     return TokenBalance {..}
 
 instance Binary TokenBalance where
@@ -601,10 +616,12 @@ instance MarshalJSON Network TokenBalance where
     A.object
       [ "address" .= marshalValue net b.address,
         "category" .= b.category,
-        "confirmed" .= show b.confirmed,
-        "unconfirmed" .= show b.unconfirmed,
+        "confirmed" .= show b.confirmedTokens,
+        "unconfirmed" .= show b.unconfirmedTokens,
         "nfts" .= b.nfts,
-        "utxo" .= b.utxo
+        "utxo" .= b.tokenUtxo,
+        "txs" .= b.tokenTxs,
+        "received" .= show b.receivedTokens
       ]
 
   marshalEncoding net b =
@@ -612,20 +629,24 @@ instance MarshalJSON Network TokenBalance where
       mconcat
         [ "address" `A.pair` marshalEncoding net b.address,
           "category" `A.pair` toEncoding b.category,
-          "confirmed" `A.pair` A.string (show b.confirmed),
-          "unconfirmed" `A.pair` A.string (show b.unconfirmed),
+          "confirmed" `A.pair` A.string (show b.confirmedTokens),
+          "unconfirmed" `A.pair` A.string (show b.unconfirmedTokens),
           "nfts" `A.pair` A.word64 b.nfts,
-          "utxo" `A.pair` A.word64 b.utxo
+          "utxo" `A.pair` A.word64 b.tokenUtxo,
+          "txs" `A.pair` A.word64 b.tokenTxs,
+          "received" `A.pair` A.string (show b.receivedTokens)
         ]
 
   unmarshalValue net =
     A.withObject "TokenBalance" $ \o -> do
       address <- o .: "address" >>= unmarshalValue net
       category <- o .: "category"
-      confirmed <- o .: "confirmed" >>= amount
-      unconfirmed <- o .: "unconfirmed" >>= amount
+      confirmedTokens <- o .: "confirmed" >>= amount
+      unconfirmedTokens <- o .: "unconfirmed" >>= amount
       nfts <- o .: "nfts"
-      utxo <- o .: "utxo"
+      tokenUtxo <- o .: "utxo"
+      tokenTxs <- o .: "txs"
+      receivedTokens <- o .: "received" >>= amount
       return TokenBalance {..}
     where
       amount = maybe (fail "Not a token amount") return . readMaybe . T.unpack
@@ -633,7 +654,7 @@ instance MarshalJSON Network TokenBalance where
 -- | The tokens of a category that an address that never held any holds.
 zeroTokenBalance :: Address -> TxHash -> TokenBalance
 zeroTokenBalance address category =
-  TokenBalance {address, category, confirmed = 0, unconfirmed = 0, nfts = 0, utxo = 0}
+  TokenBalance {address, category, confirmedTokens = 0, unconfirmedTokens = 0, nfts = 0, tokenUtxo = 0, tokenTxs = 0, receivedTokens = 0}
 
 -- | The tokens that the script field of an output holds (CashTokens), on the
 -- Bitcoin Cash networks.

@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
   there, `null` for an output without tokens; on Bitcoin the JSON is as it
   was. The types themselves are unchanged, with the same binary encoding:
   the tokens are read from the script, which they carry already.
-- `TokenBalance`, the tokens of one category that an address holds, with
+- `TokenBalance`, the tokens of one category that an address holds (amounts,
+  non-fungible tokens, unspent outputs, transactions, amount received), with
   `zeroTokenBalance`.
 - The requests `GetAddrTokens`, `GetTokenHolders`, `GetTokenUnspent` and
   `GetTokenTxs` for the new endpoints of haskoin-store.
