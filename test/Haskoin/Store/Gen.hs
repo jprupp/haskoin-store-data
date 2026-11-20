@@ -17,6 +17,7 @@ module Haskoin.Store.Gen
     arbitraryEventCommand,
     arbitraryDeriveType,
     arbitraryBalance,
+    arbitraryTokenBalance,
     arbitraryUnspent,
     arbitraryBlockData,
     arbitraryXPubBal,
@@ -202,6 +203,16 @@ arbitraryBalance net =
   Balance
     <$> arbitraryAddress net
     <*> arbitrary
+    <*> arbitrary
+    <*> arbitrary
+    <*> arbitrary
+    <*> arbitrary
+
+arbitraryTokenBalance :: Network -> Gen TokenBalance
+arbitraryTokenBalance net =
+  TokenBalance
+    <$> arbitraryAddress net
+    <*> arbitraryTxHash
     <*> arbitrary
     <*> arbitrary
     <*> arbitrary

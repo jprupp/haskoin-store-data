@@ -57,6 +57,10 @@ module Haskoin.Store.WebCommon
     GetAddrBalance (..),
     GetAddrsBalance (..),
     GetAddrUnspent (..),
+    GetAddrTokens (..),
+    GetTokenHolders (..),
+    GetTokenUnspent (..),
+    GetTokenTxs (..),
     GetAddrsUnspent (..),
     GetXPub (..),
     GetXPubTxs (..),
@@ -170,6 +174,9 @@ instance ApiResponse Store.Transaction where
   parseResponse net = unmarshalValue net
 
 instance ApiResponse Store.Balance where
+  parseResponse net = unmarshalValue net
+
+instance ApiResponse Store.TokenBalance where
   parseResponse net = unmarshalValue net
 
 instance ApiResponse Store.Unspent where
@@ -323,6 +330,24 @@ data GetAddrUnspent = GetAddrUnspent !Address !LimitsParam
 
 -- | Request for unspent outputs of several addresses: @GET \/address\/unspent?addresses=…@.
 data GetAddrsUnspent = GetAddrsUnspent ![Address] !LimitsParam
+
+-- | Request for the token balances of an address, one per category
+-- (CashTokens): @GET \/address\/:address\/tokens@.
+newtype GetAddrTokens = GetAddrTokens Address
+
+-- Tokens
+
+-- | Request for the holders of the tokens of a category, one token balance
+-- per address: @GET \/token\/:category\/holders@.
+data GetTokenHolders = GetTokenHolders !TxHash !(Maybe LimitParam) !OffsetParam
+
+-- | Request for the unspent outputs that hold tokens of a category:
+-- @GET \/token\/:category\/unspent@.
+data GetTokenUnspent = GetTokenUnspent !TxHash !LimitsParam
+
+-- | Request for the transactions that touch tokens of a category:
+-- @GET \/token\/:category\/transactions@.
+data GetTokenTxs = GetTokenTxs !TxHash !LimitsParam
 
 -- XPubs
 
@@ -514,6 +539,28 @@ instance ApiResource GetAddrsUnspent (Store.SerialList Store.Unspent) where
   resourcePath _ _ = "/address/unspent"
   queryParams (GetAddrsUnspent as (LimitsParam l o sM)) =
     ([], [ParamBox as] <> noMaybeBox l <> noDefBox o <> noMaybeBox sM)
+
+instance ApiResource GetAddrTokens (Store.SerialList Store.TokenBalance) where
+  resourcePath _ = "/address/" <+> "/tokens"
+  queryParams (GetAddrTokens a) = ([ParamBox a], [])
+  captureParams _ = [ProxyBox (Proxy :: Proxy Address)]
+
+instance ApiResource GetTokenHolders (Store.SerialList Store.TokenBalance) where
+  resourcePath _ = "/token/" <+> "/holders"
+  queryParams (GetTokenHolders c l o) = ([ParamBox c], noMaybeBox l <> noDefBox o)
+  captureParams _ = [ProxyBox (Proxy :: Proxy TxHash)]
+
+instance ApiResource GetTokenUnspent (Store.SerialList Store.Unspent) where
+  resourcePath _ = "/token/" <+> "/unspent"
+  queryParams (GetTokenUnspent c (LimitsParam l o sM)) =
+    ([ParamBox c], noMaybeBox l <> noDefBox o <> noMaybeBox sM)
+  captureParams _ = [ProxyBox (Proxy :: Proxy TxHash)]
+
+instance ApiResource GetTokenTxs (Store.SerialList Store.TxRef) where
+  resourcePath _ = "/token/" <+> "/transactions"
+  queryParams (GetTokenTxs c (LimitsParam l o sM)) =
+    ([ParamBox c], noMaybeBox l <> noDefBox o <> noMaybeBox sM)
+  captureParams _ = [ProxyBox (Proxy :: Proxy TxHash)]
 
 -----------
 -- XPubs --

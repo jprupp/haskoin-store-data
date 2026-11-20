@@ -63,6 +63,10 @@ module Haskoin.Store.WebClient
     GetAddrBalance (..),
     GetAddrsBalance (..),
     GetAddrUnspent (..),
+    GetAddrTokens (..),
+    GetTokenHolders (..),
+    GetTokenUnspent (..),
+    GetTokenTxs (..),
     GetAddrsUnspent (..),
 
     -- * Extended public keys

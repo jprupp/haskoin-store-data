@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)
 
+## [Unreleased]
+
+### Added
+- **Tokens of Bitcoin Cash (CashTokens).** `scriptTokens` reads the tokens
+  that the script field of an output holds, on the Bitcoin Cash networks.
+  The JSON of `StoreOutput`, `StoreInput` and `Unspent` has a `token` field
+  there, `null` for an output without tokens; on Bitcoin the JSON is as it
+  was. The types themselves are unchanged, with the same binary encoding:
+  the tokens are read from the script, which they carry already.
+- `TokenBalance`, the tokens of one category that an address holds, with
+  `zeroTokenBalance`.
+- The requests `GetAddrTokens`, `GetTokenHolders`, `GetTokenUnspent` and
+  `GetTokenTxs` for the new endpoints of haskoin-store.
+
+### Changed
+- Needs haskoin-core 2.1, which reads the token prefix. Until it is on
+  Hackage, `stack.yaml` pins its `cashtokens` branch.
+
 ## [3.0.1] - 2026-11-19
 
 ### Changed

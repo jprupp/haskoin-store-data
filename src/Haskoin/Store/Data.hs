@@ -52,6 +52,11 @@ module Haskoin.Store.Data
     zeroBalance,
     nullBalance,
 
+    -- * Tokens
+    TokenBalance (..),
+    zeroTokenBalance,
+    scriptTokens,
+
     -- * Block Data
     BlockData (..),
     confirmed,
@@ -166,7 +171,7 @@ import Data.Aeson
   )
 import Data.Aeson qualified as A
 import Data.Aeson.Encoding qualified as A
-import Data.Aeson.Types (Parser)
+import Data.Aeson.Types (Pair, Parser)
 import Data.Binary (Binary (get, put))
 import Data.Bits (Bits (..))
 import Data.Bool (bool)
@@ -533,6 +538,133 @@ nullBalance
     } = True
 nullBalance _ = False
 
+-- | The tokens of one category that an address holds (CashTokens, on
+-- Bitcoin Cash).
+--
+-- It is the counterpart of t'Balance' for the tokens of a category:
+-- @confirmed@ plus @unconfirmed@ is the fungible amount the address holds
+-- now, counting the mempool, as in t'Balance'. The amounts are in tokens of
+-- the category, not in satoshis; the coins of the same outputs are in the
+-- address's t'Balance', as those of any output.
+--
+-- The amounts are written as strings in JSON, as in
+-- 'Haskoin.Script.CashToken.TokenData': a category can have up to
+-- 'maxTokenAmount' tokens, more than a JSON number holds exactly in many
+-- languages.
+data TokenBalance = TokenBalance
+  { -- | address that holds the tokens
+    address :: !Address,
+    -- | category of the tokens
+    category :: !TxHash,
+    -- | fungible tokens in outputs in blocks that are not being spent
+    confirmed :: !Word64,
+    -- | fungible tokens that the mempool adds, as in t'Balance'
+    unconfirmed :: !Word64,
+    -- | number of non-fungible tokens, counting the mempool
+    nfts :: !Word64,
+    -- | number of unspent outputs that hold tokens of the category, counting
+    -- the mempool
+    utxo :: !Word64
+  }
+  deriving (Show, Read, Eq, Ord, Generic, Hashable, NFData)
+
+instance Serial TokenBalance where
+  {-# INLINEABLE serialize #-}
+  {-# INLINEABLE deserialize #-}
+  serialize b = do
+    serialize b.address
+    serialize b.category
+    putWord64be b.confirmed
+    putWord64be b.unconfirmed
+    putWord64be b.nfts
+    putWord64be b.utxo
+
+  deserialize = do
+    address <- deserialize
+    category <- deserialize
+    confirmed <- getWord64be
+    unconfirmed <- getWord64be
+    nfts <- getWord64be
+    utxo <- getWord64be
+    return TokenBalance {..}
+
+instance Binary TokenBalance where
+  put = serialize
+  get = deserialize
+
+instance Serialize TokenBalance where
+  put x = putDirect (serialize x)
+  get = getDirect deserialize
+
+instance MarshalJSON Network TokenBalance where
+  marshalValue net b =
+    A.object
+      [ "address" .= marshalValue net b.address,
+        "category" .= b.category,
+        "confirmed" .= show b.confirmed,
+        "unconfirmed" .= show b.unconfirmed,
+        "nfts" .= b.nfts,
+        "utxo" .= b.utxo
+      ]
+
+  marshalEncoding net b =
+    A.pairs $
+      mconcat
+        [ "address" `A.pair` marshalEncoding net b.address,
+          "category" `A.pair` toEncoding b.category,
+          "confirmed" `A.pair` A.string (show b.confirmed),
+          "unconfirmed" `A.pair` A.string (show b.unconfirmed),
+          "nfts" `A.pair` A.word64 b.nfts,
+          "utxo" `A.pair` A.word64 b.utxo
+        ]
+
+  unmarshalValue net =
+    A.withObject "TokenBalance" $ \o -> do
+      address <- o .: "address" >>= unmarshalValue net
+      category <- o .: "category"
+      confirmed <- o .: "confirmed" >>= amount
+      unconfirmed <- o .: "unconfirmed" >>= amount
+      nfts <- o .: "nfts"
+      utxo <- o .: "utxo"
+      return TokenBalance {..}
+    where
+      amount = maybe (fail "Not a token amount") return . readMaybe . T.unpack
+
+-- | The tokens of a category that an address that never held any holds.
+zeroTokenBalance :: Address -> TxHash -> TokenBalance
+zeroTokenBalance address category =
+  TokenBalance {address, category, confirmed = 0, unconfirmed = 0, nfts = 0, utxo = 0}
+
+-- | The tokens that the script field of an output holds (CashTokens), on the
+-- Bitcoin Cash networks.
+--
+-- The tokens are not a field of their own in t'StoreOutput', t'StoreInput'
+-- or t'Unspent': they are written at the front of the script field, which
+-- these types carry already, so they are read from it whenever they are
+-- needed. The JSON of these types has them in a @token@ field.
+--
+-- 'Nothing' on the other networks, where the byte 0xef that starts a token
+-- prefix is only an undefined opcode, and for a script field whose prefix is
+-- not valid, which consensus keeps out of the chain.
+scriptTokens :: Network -> ByteString -> Maybe TokenData
+scriptTokens net script
+  | isJust net.cashAddrPrefix = either (const Nothing) fst (splitTokenData script)
+  | otherwise = Nothing
+
+-- | The @token@ field of the JSON of an output: on the Bitcoin Cash networks
+-- only, so that the JSON of the other networks stays as it was, and @null@
+-- for an output without tokens.
+tokenPairs :: Network -> ByteString -> [Pair]
+tokenPairs net script
+  | isJust net.cashAddrPrefix = ["token" .= scriptTokens net script]
+  | otherwise = []
+
+-- | 'tokenPairs' as an encoding.
+tokenSeries :: Network -> ByteString -> A.Series
+tokenSeries net script
+  | isJust net.cashAddrPrefix = "token" `A.pair` toEncoding (scriptTokens net script)
+  | otherwise = mempty
+
 instance MarshalJSON Network Balance where
   marshalValue net b =
     A.object
@@ -660,7 +792,7 @@ scriptInputKind s
 
 instance MarshalJSON Network Unspent where
   marshalValue net u =
-    A.object
+    A.object $
       [ "address" .= fmap (marshalValue net) u.address,
         "block" .= u.block,
         "txid" .= u.outpoint.hash,
@@ -668,6 +800,7 @@ instance MarshalJSON Network Unspent where
         "pkscript" .= encodeHex u.script,
         "value" .= u.value
       ]
+        <> tokenPairs net u.script
 
   marshalEncoding net u =
     A.pairs $
@@ -677,7 +810,8 @@ instance MarshalJSON Network Unspent where
           "txid" `A.pair` toEncoding u.outpoint.hash,
           "index" `A.pair` A.word32 u.outpoint.index,
           "pkscript" `A.pair` hexEncoding (B.fromStrict u.script),
-          "value" `A.pair` A.word64 u.value
+          "value" `A.pair` A.word64 u.value,
+          tokenSeries net u.script
         ]
 
   unmarshalValue net =
@@ -860,7 +994,7 @@ isCoinbase StoreInput {} = False
 
 instance MarshalJSON Network StoreInput where
   marshalValue net StoreInput {..} =
-    A.object
+    A.object $
       [ "coinbase" .= False,
         "txid" .= outpoint.hash,
         "output" .= outpoint.index,
@@ -871,8 +1005,9 @@ instance MarshalJSON Network StoreInput where
         "address" .= (marshalValue net <$> address),
         "witness" .= map encodeHex witness
       ]
-  marshalValue _net StoreCoinbase {..} =
-    A.object
+        <> tokenPairs net pkscript
+  marshalValue net StoreCoinbase {..} =
+    A.object $
       [ "coinbase" .= True,
         "txid" .= outpoint.hash,
         "output" .= outpoint.index,
@@ -883,6 +1018,7 @@ instance MarshalJSON Network StoreInput where
         "address" .= Null,
         "witness" .= map encodeHex witness
       ]
+        <> tokenPairs net B.empty
 
   marshalEncoding net StoreInput {..} =
     A.pairs $
@@ -895,9 +1031,10 @@ instance MarshalJSON Network StoreInput where
           "pkscript" `A.pair` hexEncoding (B.fromStrict pkscript),
           "value" `A.pair` A.word64 value,
           "address" `A.pair` maybe A.null_ (marshalEncoding net) address,
-          "witness" `A.pair` A.list (hexEncoding . B.fromStrict) witness
+          "witness" `A.pair` A.list (hexEncoding . B.fromStrict) witness,
+          tokenSeries net pkscript
         ]
-  marshalEncoding _net StoreCoinbase {..} =
+  marshalEncoding net StoreCoinbase {..} =
     A.pairs $
       mconcat
         [ "coinbase" .= True,
@@ -908,7 +1045,8 @@ instance MarshalJSON Network StoreInput where
           "pkscript" `A.pair` A.null_,
           "value" `A.pair` A.null_,
           "address" `A.pair` A.null_,
-          "witness" `A.pair` A.list (hexEncoding . B.fromStrict) witness
+          "witness" `A.pair` A.list (hexEncoding . B.fromStrict) witness,
+          tokenSeries net B.empty
         ]
 
   unmarshalValue net =
@@ -993,13 +1131,14 @@ data StoreOutput = StoreOutput
 
 instance MarshalJSON Network StoreOutput where
   marshalValue net o =
-    A.object
+    A.object $
       [ "address" .= (marshalValue net <$> o.address),
         "pkscript" .= encodeHex o.script,
         "value" .= o.value,
         "spent" .= isJust o.spender,
         "spender" .= o.spender
       ]
+        <> tokenPairs net o.script
 
   marshalEncoding net o =
     A.pairs $
@@ -1008,7 +1147,8 @@ instance MarshalJSON Network StoreOutput where
           "pkscript" `A.pair` hexEncoding (B.fromStrict o.script),
           "value" `A.pair` A.word64 o.value,
           "spent" `A.pair` A.bool (isJust o.spender),
-          "spender" `A.pair` toEncoding o.spender
+          "spender" `A.pair` toEncoding o.spender,
+          tokenSeries net o.script
         ]
 
   unmarshalValue net =

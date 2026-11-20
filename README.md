@@ -36,6 +36,20 @@ main = do
 The client appends the name of the network to the host, as in the layout of
 api.haskoin.com. The API speaks JSON, and so does the client.
 
+## Tokens of Bitcoin Cash
+
+On Bitcoin Cash an output can hold tokens (CashTokens), written at the
+front of its script field. `scriptTokens net script` reads them from the
+script of a `StoreOutput`, a `StoreInput` or an `Unspent`, which have no
+field of their own for them. Their JSON has a `token` field on the Bitcoin
+Cash networks: the category, the fungible amount as a string, and the
+non-fungible token, or `null`. On Bitcoin the field is not there.
+
+`GetAddrTokens` asks for the token balances of an address, one
+`TokenBalance` per category. `GetTokenHolders`, `GetTokenUnspent` and
+`GetTokenTxs` ask for the holders, the unspent outputs and the transactions
+of a category.
+
 Errors come back as `Left` an `Except`.
 
 ## Events

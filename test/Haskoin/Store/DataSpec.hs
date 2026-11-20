@@ -12,7 +12,7 @@ import Data.Bytes.Put (runPutS)
 import Data.Bytes.Serial (Serial, serialize)
 import Data.HashMap.Strict qualified as HashMap
 import Data.IntMap qualified as IntMap
-import Data.Maybe (fromJust)
+import Data.Maybe (fromJust, fromMaybe)
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import Haskoin
@@ -37,6 +37,7 @@ spec = do
     -- also covered inside the types below, but each has its own cereal and
     -- binary instances
     binaryLaws (anyNet arbitraryBalance)
+    binaryLaws (anyNet arbitraryTokenBalance)
     binaryLaws (anyNet arbitraryUnspent)
     binaryLaws (anyNet arbitraryDeriveType)
     binaryLaws (anyNet arbitraryXPubSpec)
@@ -72,6 +73,7 @@ spec = do
   -- BinfoTx are encoded through their own instances inside these.
   describe "JSON of a network" $ do
     marshalLaws arbitraryXPubBal
+    marshalLaws arbitraryTokenBalance
     marshalLaws arbitraryXPubUnspent
     marshalLaws arbitraryBlockData
     marshalLaws arbitraryTransaction
@@ -203,6 +205,23 @@ spec = do
           === (b.confirmed == 0 && b.unconfirmed == 0 && b.utxo == 0 && b.txs == 0 && b.received == 0)
           .&&. nullBalance (zeroBalance b.address)
 
+  describe "Tokens" $ do
+    it "are read from the script field on Bitcoin Cash only" $
+      forAll arbitraryTokenData $ \t ->
+        forAll arbitraryBS1 $ \lock ->
+          let script = maybe B.empty (<> lock) (encodeTokenPrefix t)
+           in (scriptTokens bch script, scriptTokens btc script, scriptTokens bch lock)
+                === (Just t, Nothing, Nothing)
+    it "are in the JSON of an output on Bitcoin Cash, with null for none" $
+      forAll arbitraryTokenData $ \t ->
+        let script = fromMaybe B.empty (encodeTokenPrefix t) <> "\x51"
+            out s = StoreOutput {value = 1, script = s, spender = Nothing, address = Nothing}
+            field net s = case marshalValue net (out s) of
+              A.Object o -> KeyMap.lookup "token" o
+              _ -> Nothing
+         in (field bch script, field bch "\x51", field btc script)
+              === (Just (A.toJSON (Just t)), Just A.Null, Nothing)
+
   describe "Derivation types" $
     it "are named legacy, compat and segwit, and read normal as legacy" $ do
       map deriveTypeToText [DeriveNormal, DeriveP2SH, DeriveP2WPKH]
@@ -276,11 +295,11 @@ spec = do
          in t.size `shouldBe` fromIntegral (B.length (runPutS (serialize grown)))
     -- an output has an address only where the network has that kind
     forM_
-      [ ("a SegWit output an address on Bitcoin", btc, p2wpkh, "\"bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4\""),
-        ("a SegWit-shaped output no address on Bitcoin Cash", bch, p2wpkh, "null"),
-        ("a 256-bit hash lock no address on Bitcoin", btc, hashLock, "null")
+      [ ("a SegWit output an address on Bitcoin", btc, p2wpkh, "\"bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4\"", ""),
+        ("a SegWit-shaped output no address on Bitcoin Cash", bch, p2wpkh, "null", ",\"token\":null"),
+        ("a 256-bit hash lock no address on Bitcoin", btc, hashLock, "null", "")
       ]
-      $ \(what, net, script, addr) ->
+      $ \(what, net, script, addr, token) ->
         it ("gives " <> what) $
           outputJson net script
             `shouldBe` [ json
@@ -288,7 +307,9 @@ spec = do
                                <> addr
                                <> ",\"pkscript\":\""
                                <> BL.fromStrict (encodeUtf8 script)
-                               <> "\",\"value\":1000,\"spent\":false,\"spender\":null}"
+                               <> "\",\"value\":1000,\"spent\":false,\"spender\":null"
+                               <> token
+                               <> "}"
                            )
                        ]
   where

@@ -1,5 +1,5 @@
 name: haskoin-store-data
-version: 3.0.1
+version: 3.1.0
 synopsis: Data types and API client of Haskoin Store
 description: |
   The types of the data that Haskoin Store serves (blocks, transactions,
@@ -52,7 +52,7 @@ dependencies:
   - containers ^>= 0.7
   - deepseq ^>= 1.5.1.0
   - hashable ^>= 1.5.1.0
-  - haskoin-core ^>= 2.0.0
+  - haskoin-core >= 2.0.0 && < 2.2
   - network ^>= 3.2.12.0
   - string-conversions ^>= 0.4.0.1
   - text ^>= 2.1.4
