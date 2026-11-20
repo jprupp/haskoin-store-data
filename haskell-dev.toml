@@ -1,0 +1,8 @@
+# What sets haskoin-store-data apart for haskell-dev, the development loop of
+# https://github.com/jprupp/tools: `haskell-dev build`, `test` and `docs`.
+
+# The spec modules that take most of the time of the tests. Each of their
+# groups is run apart, so that the test processes share them evenly.
+slow-specs = [
+  "Haskoin.Store.Data",
+]

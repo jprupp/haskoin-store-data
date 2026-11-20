@@ -94,6 +94,21 @@ stack build
 stack test
 ```
 
+These commands build the package as it is released, with optimisation. For
+the time between two commits there is a faster loop: `haskell-dev`, from
+[jprupp/tools](https://github.com/jprupp/tools), on your `PATH`.
+
+```sh
+haskell-dev build          # build without optimisation
+haskell-dev test           # run the tests in several processes at once
+haskell-dev docs           # build the documentation and check its comments
+```
+
+`haskell-dev.toml` tells it which spec modules are slow, so that it shares
+them between the test processes. Do not mix the two kinds of build in one
+folder: the flags differ, so each switch compiles everything again. Never
+time code with `haskell-dev`.
+
 The tests check every type by law: JSON round-trips, the fast encoders
 write the same JSON as `toJSON`, the client reads what the server writes,
 the binary encodings of the database round-trip and agree between Serial,

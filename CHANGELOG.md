@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
   Nix build kept per release of nixpkgs.
 - `scripts/format` is gone: `haskell-format`, from jprupp/tools, formats
   every Haskell file.
+- `haskell-dev`, from jprupp/tools, is the fast loop of work on the code:
+  `build`, `test` and `docs`, without optimisation and with the tests in
+  several processes. What it needs to know about this package, the slow
+  spec module, is in the new `haskell-dev.toml`.
 
 ## [3.0.1] - 2026-11-19
 

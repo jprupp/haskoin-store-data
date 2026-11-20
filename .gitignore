@@ -23,3 +23,5 @@ cabal.project.local~
 TAGS
 .idea/
 *.iml
+# The work folder of the documentation (haskell-dev docs, of jprupp/tools)
+.stack-work-docs/
