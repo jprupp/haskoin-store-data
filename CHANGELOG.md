@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-11-22
+
+The types and requests of the tokens of Bitcoin Cash (CashTokens), for
+haskoin-store 2.0.0, on haskoin-core 3.0.
+
 ### Added
 - **Tokens of Bitcoin Cash (CashTokens).** `scriptTokens` reads the tokens
   that the script field of an output holds, on the Bitcoin Cash networks.
@@ -30,6 +35,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
   Nix build kept per release of nixpkgs.
 - `scripts/format` is gone: `haskell-format`, from jprupp/tools, formats
   every Haskell file.
+- The README has a table of the requests of the token endpoints, what the
+  fields of a `TokenBalance` mean, and an example of the client for tokens.
 - `haskell-dev`, from jprupp/tools, is the fast loop of work on the code:
   `build`, `test` and `docs`, without optimisation and with the tests in
   several processes. What it needs to know about this package, the slow

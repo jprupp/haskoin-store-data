@@ -45,10 +45,48 @@ field of their own for them. Their JSON has a `token` field on the Bitcoin
 Cash networks: the category, the fungible amount as a string, and the
 non-fungible token, or `null`. On Bitcoin the field is not there.
 
-`GetAddrTokens` asks for the token balances of an address, one
-`TokenBalance` per category. `GetTokenHolders`, `GetTokenUnspent` and
-`GetTokenTxs` ask for the holders, the unspent outputs and the transactions
-of a category.
+The requests of the token endpoints of haskoin-store 2.0.0:
+
+| Request | Endpoint | Answer |
+| --- | --- | --- |
+| `GetAddrTokens address` | `/address/:address/tokens` | a `TokenBalance` per category that the address holds |
+| `GetTokenHolders category limit offset` | `/token/:category/holders` | a `TokenBalance` per address that holds the category |
+| `GetTokenUnspent category limits` | `/token/:category/unspent` | the `Unspent` outputs that hold it, newest first |
+| `GetTokenTxs category limits` | `/token/:category/transactions` | the `TxRef`s that moved it, newest first |
+
+A `TokenBalance` counts the mempool, as a `Balance` does:
+`confirmedTokens` is what blocks hold and the mempool does not spend, and
+`unconfirmedTokens` what the mempool adds, so their sum is what the address
+holds now. `nfts` counts its non-fungible tokens, `tokenUtxo` the unspent
+outputs that hold the category, `tokenTxs` the transactions that moved it
+to or from the address, and `receivedTokens` every fungible token it ever
+received. A category is the `TxHash` of the transaction whose output 0 the
+first transaction of the tokens spent. On Bitcoin the server answers these
+requests with empty lists.
+
+```haskell
+{-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE OverloadedStrings #-}
+
+import Data.Default (def)
+import Haskoin (bch, textToAddr)
+import Haskoin.Store.Data (SerialList (..), TokenBalance (..), Unspent (..), scriptTokens)
+import Haskoin.Store.WebClient
+
+main :: IO ()
+main = do
+  let cfg = def {net = bch}
+      Just addr = textToAddr bch "bitcoincash:qz…"
+  Right (SerialList balances) <- apiCall cfg (GetAddrTokens addr)
+  mapM_ (\b -> print (b.category, b.confirmedTokens + b.unconfirmedTokens)) balances
+  -- the outputs of the first category, with the tokens of each
+  case balances of
+    b : _ -> do
+      let limits = LimitsParam Nothing (OffsetParam 0) Nothing
+      Right (SerialList outs) <- apiCall cfg (GetTokenUnspent b.category limits)
+      mapM_ (\u -> print (u.outpoint, scriptTokens bch u.script)) outs
+    [] -> return ()
+```
 
 Errors come back as `Left` an `Except`.
 
