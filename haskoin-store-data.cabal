@@ -108,6 +108,7 @@ test-suite spec
     , lens >=5.3.6 && <5.4
     , network
     , string-conversions >=0.4.0.1 && <0.5
+    , temporary
     , text >=2.1.4 && <2.2
     , time ==1.14.*
     , unordered-containers >=0.2.21 && <0.3

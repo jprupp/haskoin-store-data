@@ -36,6 +36,14 @@ main = do
 The client appends the name of the network to the host, as in the layout of
 api.haskoin.com. The API speaks JSON, and so does the client.
 
+A store on the same machine may listen on a Unix socket (`--socket`). Give
+its path in `socket`, and every request goes to it, whatever host the URL
+names:
+
+```haskell
+let cfg = def {net = btc, host = "http://localhost/", socket = Just "/run/haskoin-store/web.sock"}
+```
+
 ## Tokens of Bitcoin Cash
 
 On Bitcoin Cash an output can hold tokens (CashTokens), written at the

@@ -25,6 +25,10 @@ haskoin-store 2.0.0, on haskoin-core 3.0.
   `GetTokenTxs` for the new endpoints of haskoin-store.
 
 ### Changed
+- **The client reaches a store on a Unix socket.** `ApiConfig` has a new
+  field, `socket`: when it names one, every request goes to it, whatever
+  host the URL names, as a store serves with `--socket`. The tests of the
+  client serve on a Unix socket, and name no port.
 - **Version 4.0.0**: needs haskoin-core 3.0, which reads the token prefix
   and adds a field to `Network`. The types of this package hold those of
   haskoin-core, so a program that uses both moves to haskoin-core 3.0 with

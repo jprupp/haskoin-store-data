@@ -113,9 +113,17 @@ import Haskoin.Store.Data qualified as Store
 import Haskoin.Store.WebCommon
 import Haskoin.Transaction
 import Haskoin.Util
-import Network.HTTP.Client (HttpException (..), Request (..), RequestBody (..))
+import Network.HTTP.Client
+  ( HttpException (..),
+    ManagerSettings (..),
+    Request (..),
+    RequestBody (..),
+    defaultManagerSettings,
+  )
+import Network.HTTP.Client.Internal (socketConnection)
 import Network.HTTP.Types (StdMethod (..))
 import Network.HTTP.Types.Status
+import Network.Socket qualified as Socket
 import Network.Wreq qualified as HTTP
 import Network.Wreq.Types (Payload (..), ResponseChecker)
 import Numeric.Natural (Natural)
@@ -127,13 +135,23 @@ import Numeric.Natural (Natural)
 -- ApiConfig
 -- { net = bch
 -- , host = "https://api.haskoin.com/"
+-- , socket = Nothing
 -- }
 -- @
+--
+-- A server on the same machine may listen on a Unix socket, as haskoin-store
+-- does with @--socket@. Give its path in 'socket', and every request
+-- goes to it, whatever host the URL names, which then only has to be a URL
+-- of plain HTTP, such as @http:\/\/localhost\/@: a socket of the machine
+-- needs no encryption.
 data ApiConfig = ApiConfig
   { -- | network to query; its name is appended to the host
     net :: !Network,
     -- | base URL of the API, ending in a slash
-    host :: !String
+    host :: !String,
+    -- | a Unix socket that every request goes to, in place of the host and
+    -- port of the URL
+    socket :: !(Maybe FilePath)
   }
   deriving (Eq, Show)
 
@@ -141,7 +159,8 @@ instance Default ApiConfig where
   def =
     ApiConfig
       { net = bch,
-        host = "https://api.haskoin.com/"
+        host = "https://api.haskoin.com/",
+        socket = Nothing
       }
 
 -- | Make a call to the haskoin-store API.
@@ -163,7 +182,7 @@ apiCall ::
   ApiConfig ->
   a ->
   IO (Either Store.Except b)
-apiCall (ApiConfig net apiHost) res =
+apiCall (ApiConfig net apiHost through) res =
   case toOptions net res of
     Left e -> return (Left e)
     -- as for a parameter of the query string that cannot be written
@@ -171,10 +190,10 @@ apiCall (ApiConfig net apiHost) res =
     Right args ->
       let url = apiHost <> net.name <> cs (queryPath net res)
        in case resourceMethod $ asProxy res of
-            GET -> getJSON net args url
+            GET -> getJSON net (args <> via through) url
             POST ->
               case resourceBody res of
-                Just (PostBox body) -> postJSON net args url body
+                Just (PostBox body) -> postJSON net (args <> via through) url body
                 _ -> return . Left $ Store.StringError "Could not post resource"
             _ -> return . Left $ Store.StringError "Unsupported HTTP method"
 
@@ -228,8 +247,8 @@ apiEventsAfter conf = listenEvents conf . Just
 
 -- | The events of a server, from now or from after one of them.
 listenEvents :: ApiConfig -> Maybe Store.Event -> (Store.Event -> IO Bool) -> IO (Either Store.Except ())
-listenEvents (ApiConfig net apiHost) after handle = do
-  r <- try (reaching (HTTP.foldGetWith (jsonOpts mempty) step BS.empty url))
+listenEvents (ApiConfig net apiHost through) after handle = do
+  r <- try (reaching (HTTP.foldGetWith (jsonOpts (via through)) step BS.empty url))
   return $ case r of
     Left Stopped -> Right ()
     Right (Left e) -> Left e
@@ -331,6 +350,24 @@ toOption net a = do
     maybeToEither (Store.UserError "Invalid Param") $
       encodeParam net a
   return $ applyOpt (paramLabel a) res
+
+-- | Send the requests through a Unix socket, if one is given. The settings
+-- make a manager for each request, which a client that calls a local
+-- server now and then does not notice.
+via :: Maybe FilePath -> Endo HTTP.Options
+via Nothing = mempty
+via (Just path) = Endo $ HTTP.manager .~ Left (unixSocket path)
+
+-- | Settings of an HTTP client whose every connection goes to a Unix
+-- socket, whatever host and port the URL names.
+unixSocket :: FilePath -> ManagerSettings
+unixSocket path =
+  defaultManagerSettings
+    { managerRawConnection = return $ \_ _ _ -> do
+        s <- Socket.socket Socket.AF_UNIX Socket.Stream Socket.defaultProtocol
+        Socket.connect s (Socket.SockAddrUnix path) `onException` Socket.close s
+        socketConnection s 8192
+    }
 
 -- | Set a query string parameter to comma-separated values.
 applyOpt :: Text -> [Text] -> Endo HTTP.Options

@@ -31,6 +31,7 @@ import Haskoin.Store.WebCommon
 import Haskoin.Util.Arbitrary
 import Network.Socket qualified as S
 import Network.Socket.ByteString qualified as S
+import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import Test.QuickCheck (generate)
 
@@ -42,25 +43,33 @@ with _ _ other = other
 failed :: Either String a -> Bool
 failed = either (const True) (const False)
 
--- | A server that answers one request with these pieces, a moment apart,
--- and closes. The action is given its address.
-serving :: [B.ByteString] -> (String -> IO a) -> IO a
+-- | A server on a Unix socket of a folder of its own that answers one
+-- request with these pieces, a moment apart, and closes. The action is given
+-- a client of it, for a network.
+serving :: [B.ByteString] -> ((Network -> ApiConfig) -> IO a) -> IO a
 serving pieces go =
-  bracket open S.close $ \sock -> do
-    port <- S.socketPort sock
-    void . forkIO $ do
-      (conn, _) <- S.accept sock
-      void (S.recv conn 65536)
-      forM_ pieces $ \piece -> S.sendAll conn piece >> threadDelay 50000
-      S.close conn
-    go ("http://127.0.0.1:" <> show port <> "/")
+  withSystemTempDirectory "haskoin-store-data-" $ \dir -> do
+    let path = dir <> "/server.sock"
+    bracket (open path) S.close $ \sock -> do
+      void . forkIO $ do
+        (conn, _) <- S.accept sock
+        void (S.recv conn 65536)
+        forM_ pieces $ \piece -> S.sendAll conn piece >> threadDelay 50000
+        S.close conn
+      go (\n -> ApiConfig n "http://localhost/" (Just path))
   where
-    open = do
-      sock <- S.socket S.AF_INET S.Stream S.defaultProtocol
-      S.setSocketOption sock S.ReuseAddr 1
-      S.bind sock (S.SockAddrInet 0 (S.tupleToHostAddress (127, 0, 0, 1)))
+    open path = do
+      sock <- S.socket S.AF_UNIX S.Stream S.defaultProtocol
+      S.bind sock (S.SockAddrUnix path)
       S.listen sock 1
       return sock
+
+-- | A client of a server that is not there: a Unix socket in a folder of
+-- its own, that nothing listens on.
+nowhere :: ((Network -> ApiConfig) -> IO a) -> IO a
+nowhere go =
+  withSystemTempDirectory "haskoin-store-data-" $ \dir ->
+    go (\n -> ApiConfig n "http://localhost/" (Just (dir <> "/nothing.sock")))
 
 -- | The head of a response whose body comes in chunks.
 chunked :: B.ByteString -> B.ByteString
@@ -155,25 +164,25 @@ spec = do
       (a == b, compare a b == EQ) `shouldBe` (False, False)
 
   describe "Client" $ do
-    let nowhere = "http://127.0.0.1:1/"
-        segwit = fromJust (textToAddr btc "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4")
+    let segwit = fromJust (textToAddr btc "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4")
         reason (Left (StringError why)) = why
         reason _ = ""
     it "answers an error for an address that the network cannot write" $
-      apiCall (ApiConfig bch nowhere) (GetAddrBalance segwit) `shouldReturn` Left (UserError "Invalid Param")
-    it "answers an error, and throws nothing, when there is no server" $ do
-      r <- apiCall (ApiConfig btc nowhere) (GetAddrBalance segwit)
+      nowhere $
+        \conf -> apiCall (conf bch) (GetAddrBalance segwit) `shouldReturn` Left (UserError "Invalid Param")
+    it "answers an error, and throws nothing, when there is no server" $ nowhere $ \conf -> do
+      r <- apiCall (conf btc) (GetAddrBalance segwit)
       reason r `shouldSatisfy` ("Could not reach the server" `isPrefixOf`)
-      e <- apiEvents (ApiConfig btc nowhere) (\_ -> return True)
+      e <- apiEvents (conf btc) (\_ -> return True)
       reason e `shouldSatisfy` ("Could not reach the server" `isPrefixOf`)
-    it "ends a batch of size zero" $ do
-      r <- apiBatch 0 (ApiConfig btc nowhere) (GetTxs [TxHash (sha256 ("a" :: B.ByteString))])
+    it "ends a batch of size zero" $ nowhere $ \conf -> do
+      r <- apiBatch 0 (conf btc) (GetTxs [TxHash (sha256 ("a" :: B.ByteString))])
       reason r `shouldSatisfy` ("Could not reach the server" `isPrefixOf`)
     it "reads an error that comes in pieces" $ do
       let body = BL.toStrict (A.encode ThingNotFound)
           (one, two) = B.splitAt 10 body
-      r <- serving [chunked "404 Not Found", chunk one, chunk two, "0\r\n\r\n"] $ \host ->
-        apiCall (ApiConfig btc host) (GetAddrBalance segwit)
+      r <- serving [chunked "404 Not Found", chunk one, chunk two, "0\r\n\r\n"] $ \conf ->
+        apiCall (conf btc) (GetAddrBalance segwit)
       r `shouldBe` Left ThingNotFound
     it "says the status and the start of an answer that is not from the server" $ do
       let page = "<html>Bad Gateway</html>"
@@ -182,7 +191,7 @@ spec = do
               <> C.pack (show (B.length page))
               <> "\r\n\r\n"
               <> page
-      r <- serving [answer] $ \host -> apiCall (ApiConfig btc host) (GetAddrBalance segwit)
+      r <- serving [answer] $ \conf -> apiCall (conf btc) (GetAddrBalance segwit)
       r `shouldBe` Left (StringError "HTTP 502: <html>Bad Gateway</html>")
     it "goes on after a line of events that it does not know" $ do
       let one = TxHash (sha256 ("one" :: B.ByteString))
@@ -196,6 +205,6 @@ spec = do
           chunk end,
           "0\r\n\r\n"
         ]
-        $ \host -> apiEvents (ApiConfig btc host) (\e -> modifyIORef' heard (<> [e]) >> return True)
+        $ \conf -> apiEvents (conf btc) (\e -> modifyIORef' heard (<> [e]) >> return True)
       r `shouldBe` Right ()
       readIORef heard `shouldReturn` [EventTx one, EventTx two]
