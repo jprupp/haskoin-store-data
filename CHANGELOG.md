@@ -23,8 +23,29 @@ haskoin-store 2.0.0, on haskoin-core 3.0.
   `zeroTokenBalance`.
 - The requests `GetAddrTokens`, `GetTokenHolders`, `GetTokenUnspent` and
   `GetTokenTxs` for the new endpoints of haskoin-store.
+- **The health check says in words what it found.** The JSON of a
+  `HealthCheck` has a `text` for the whole store, such as "The store is
+  healthy: it has every block up to height 812,347, with 8 peers
+  connected, and its Redis answers.", or what is wrong when it is not, and
+  a `text` in each check. `healthText` and the functions of each check
+  (`blocksText`, `lastBlockText`, `lastTxText`, `pendingTxsText`,
+  `peersText`, `databaseText`, `redisText`) write them, from the numbers;
+  a program should read `ok` and the numbers, since the wording may change.
+  The texts are written and not read back, so a `HealthCheck` reads the
+  same with or without them.
+- **`DatabaseHealth`, the state of the store's database**, in a new field
+  `database` of `HealthCheck`: whether RocksDB lets writes through
+  (`DatabaseWrites`: flowing, delayed or stopped), the compaction pending,
+  the rate writes are slowed to, the compactions and flushes running, the
+  full tables in memory, the size of the files and of their live data, and
+  the errors in the background. Stopped writes fail the check, and so
+  `isOK` of the `HealthCheck`. haskoin-store wrote the state of writes into
+  its JSON before, outside the type, where a client could not read it.
 
 ### Changed
+- **Breaking: `HealthCheck` has a field `database`** (`Maybe
+  DatabaseHealth`), so code that builds one has to give it. In JSON it may
+  be missing, as in the output of an older store, and reads as `Nothing`.
 - **The client reaches a store on a Unix socket.** `ApiConfig` has a new
   field, `socket`: when it names one, every request goes to it, whatever
   host the URL names, as a store serves with `--socket`. The tests of the

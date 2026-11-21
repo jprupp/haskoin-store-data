@@ -106,7 +106,17 @@ module Haskoin.Store.Data
     TimeHealth (..),
     CountHealth (..),
     MaxHealth (..),
+    DatabaseWrites (..),
+    DatabaseHealth (..),
     HealthCheck (..),
+    healthText,
+    blocksText,
+    lastBlockText,
+    lastTxText,
+    pendingTxsText,
+    peersText,
+    databaseText,
+    redisText,
     Event (..),
     EventCommand (..),
     Except (..),
@@ -171,6 +181,7 @@ import Data.Aeson
   )
 import Data.Aeson qualified as A
 import Data.Aeson.Encoding qualified as A
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Pair, Parser)
 import Data.Binary (Binary (get, put))
 import Data.Bits (Bits (..))
@@ -181,7 +192,7 @@ import Data.Bytes.Get
 import Data.Bytes.Put
 import Data.Bytes.Serial
 import Data.Default (Default (..))
-import Data.Foldable (toList)
+import Data.Foldable (find, toList)
 import Data.Function (on)
 import Data.HashMap.Strict (HashMap)
 import Data.HashMap.Strict qualified as HashMap
@@ -1840,6 +1851,99 @@ instance FromJSON MaxHealth where
       max <- o .: "max"
       return MaxHealth {..}
 
+-- | Whether RocksDB lets the writes of the store through.
+data DatabaseWrites
+  = -- | at full speed
+    WritesFlowing
+  | -- | slowed down, to let compactions catch up
+    WritesDelayed
+  | -- | stopped, until compactions or flushes catch up
+    WritesStopped
+  deriving (Show, Eq, Ord, Enum, Bounded, Generic, NFData)
+
+instance ToJSON DatabaseWrites where
+  toJSON = A.String . writesName
+
+instance FromJSON DatabaseWrites where
+  parseJSON = A.withText "DatabaseWrites" $ \t ->
+    maybe (fail ("Not a state of writes: " <> cs t)) return $
+      find ((== t) . writesName) [minBound .. maxBound]
+
+-- | The name of a state of writes in JSON.
+writesName :: DatabaseWrites -> Text
+writesName = \case
+  WritesFlowing -> "flowing"
+  WritesDelayed -> "delayed"
+  WritesStopped -> "stopped"
+
+-- | The state of the database of the store, as RocksDB reports it: whether
+-- it takes writes, and how much work it has in hand.
+--
+-- RocksDB writes to memory first, flushes what it wrote to files, and
+-- merges the files in the background (compaction). When compaction falls
+-- behind, it slows writes down and then stops them, and a store whose
+-- writes are stopped imports nothing. Only that fails the check: delayed
+-- writes are normal while a store syncs, and if they make it fall behind,
+-- t'BlockHealth' says so. The other numbers say why writes are slow, and
+-- are not judged: a store that syncs runs compactions all the time.
+data DatabaseHealth = DatabaseHealth
+  { -- | whether writes go through
+    writes :: !DatabaseWrites,
+    -- | bytes that RocksDB estimates it has to compact, over every column
+    -- family
+    pendingCompaction :: !Word64,
+    -- | bytes a second that writes are slowed to, 0 when they are not
+    delayedWriteRate :: !Word64,
+    -- | compactions running
+    compactions :: !Word32,
+    -- | flushes of memory to files running
+    flushes :: !Word32,
+    -- | tables in memory that are full and wait to be flushed, over every
+    -- column family
+    memtables :: !Word32,
+    -- | bytes of the files of the database, over every column family
+    size :: !Word64,
+    -- | bytes of those files that hold live data, as RocksDB estimates
+    liveData :: !Word64,
+    -- | errors of the work in the background since the database opened;
+    -- after one, RocksDB may refuse writes
+    errors :: !Word64
+  }
+  deriving (Show, Eq, Generic, NFData)
+
+instance Healthy DatabaseHealth where
+  isOK d = d.writes /= WritesStopped
+
+instance ToJSON DatabaseHealth where
+  toJSON d =
+    A.object
+      [ "writes" .= d.writes,
+        "pending-compaction-bytes" .= d.pendingCompaction,
+        "delayed-write-rate" .= d.delayedWriteRate,
+        "running-compactions" .= d.compactions,
+        "running-flushes" .= d.flushes,
+        "immutable-memtables" .= d.memtables,
+        "size-bytes" .= d.size,
+        "live-data-bytes" .= d.liveData,
+        "background-errors" .= d.errors,
+        "ok" .= isOK d,
+        "text" .= databaseText d
+      ]
+
+instance FromJSON DatabaseHealth where
+  parseJSON =
+    A.withObject "DatabaseHealth" $ \o -> do
+      writes <- o .: "writes"
+      pendingCompaction <- o .: "pending-compaction-bytes"
+      delayedWriteRate <- o .: "delayed-write-rate"
+      compactions <- o .: "running-compactions"
+      flushes <- o .: "running-flushes"
+      memtables <- o .: "immutable-memtables"
+      size <- o .: "size-bytes"
+      liveData <- o .: "live-data-bytes"
+      errors <- o .: "background-errors"
+      return DatabaseHealth {..}
+
 -- | Health of the store, as returned by @\/health@. It is healthy if every check
 -- passes.
 --
@@ -1872,7 +1976,9 @@ data HealthCheck = HealthCheck
     time :: !Word64,
     -- | whether the Redis cache answers; 'Nothing' for a store that has
     -- none
-    redis :: !(Maybe Bool)
+    redis :: !(Maybe Bool),
+    -- | the state of the database; 'Nothing' from a store from before it
+    database :: !(Maybe DatabaseHealth)
   }
   deriving (Show, Eq, Generic, NFData)
 
@@ -1883,23 +1989,32 @@ instance Healthy HealthCheck where
         isOK h.lastBlock,
         isOK h.lastTx,
         isOK h.pendingTxs,
-        isOK h.peers
+        isOK h.peers,
+        all isOK h.database
       ]
 
 instance ToJSON HealthCheck where
   toJSON h =
     A.object $
-      [ "blocks" .= h.blocks,
-        "last-block" .= h.lastBlock,
-        "last-tx" .= h.lastTx,
-        "pending-txs" .= h.pendingTxs,
-        "peers" .= h.peers,
+      [ "blocks" .= explained (blocksText h.blocks) h.blocks,
+        "last-block" .= explained (lastBlockText h.lastBlock) h.lastBlock,
+        "last-tx" .= explained (lastTxText h.lastTx) h.lastTx,
+        "pending-txs" .= explained (pendingTxsText h.pendingTxs) h.pendingTxs,
+        "peers" .= explained (peersText h.peers) h.peers,
         "net" .= h.network,
         "version" .= h.version,
         "time" .= show (posixSecondsToUTCTime $ fromIntegral h.time),
-        "ok" .= isOK h
+        "ok" .= isOK h,
+        "text" .= healthText h
       ]
-        <> ["redis" .= A.object ["ok" .= up] | Just up <- [h.redis]]
+        <> ["redis" .= A.object ["ok" .= up, "text" .= redisText up] | Just up <- [h.redis]]
+        <> ["database" .= d | Just d <- [h.database]]
+    where
+      -- the JSON of a check with what it means: the text depends on which
+      -- check it is, so it is added here and not by the check's own JSON
+      explained text x = case toJSON x of
+        A.Object o -> A.Object (KeyMap.insert "text" (A.String text) o)
+        v -> v
 
 instance FromJSON HealthCheck where
   parseJSON =
@@ -1916,7 +2031,210 @@ instance FromJSON HealthCheck where
       utcTime <- o .: "time" >>= \t -> maybe (fail ("Not a time: " <> t)) return (readMaybe t)
       time <- maybe (fail "A time before 1970, or too far ahead") return (unixSeconds utcTime)
       redis <- o .:? "redis" >>= mapM (.: "ok")
+      database <- o .:? "database"
       return HealthCheck {..}
+
+-- | What the health check says of the whole store, in a sentence or two for
+-- people: whether it is healthy, and if not, what is wrong, from the checks
+-- that fail. In the JSON of a t'HealthCheck' as @text@, beside the @text@ of
+-- each check, which says what that check found.
+--
+-- The checks say what they found with their numbers; this says what it
+-- means for whoever looks at a store, and so does the store's log when its
+-- health changes. A program should read @ok@ and the numbers, not the text,
+-- which may change between versions.
+--
+-- A store whose Redis does not answer is healthy by 'isOK', since it has
+-- what it needs to import blocks, but it answers no request (see
+-- t'HealthCheck'). The text says so, as the status of @\/health@ does.
+healthText :: HealthCheck -> Text
+healthText h
+  | null problems =
+      T.unwords $
+        [ "The store is healthy:",
+          "it has every block up to height " <> shown h.blocks.headers <> ",",
+          "with " <> plural h.peers.count "peer" <> " connected" <> case h.redis of
+            Just True -> ", and its Redis answers."
+            _ -> "."
+        ]
+          <> [slow | Just d <- [h.database], d.writes == WritesDelayed]
+  | otherwise = "The store is not healthy. " <> T.unwords problems
+  where
+    slow = "RocksDB delays writes while it compacts the database."
+    problems =
+      [blocksText h.blocks | not (isOK h.blocks)]
+        <> [lastBlockText h.lastBlock | not (isOK h.lastBlock)]
+        <> [lastTxText h.lastTx | not (isOK h.lastTx)]
+        <> [pendingTxsText h.pendingTxs | not (isOK h.pendingTxs)]
+        <> [peersText h.peers | not (isOK h.peers)]
+        <> [databaseText d | Just d <- [h.database], not (isOK d)]
+        <> [redisText False | h.redis == Just False]
+
+-- | What the check of the blocks found, a t'BlockHealth', for people.
+blocksText :: BlockHealth -> Text
+blocksText b
+  | behind < 0 =
+      T.unwords
+        [ "The database is at height " <> shown b.blocks <> ",",
+          "ahead of the best header at " <> shown b.headers <> ":",
+          "the headers catch up in a moment."
+        ]
+  | behind == 0 = "The database has every block up to the best header, at height " <> shown b.headers <> "."
+  | isOK b =
+      T.unwords
+        [ "The database is " <> plural behind "block" <> " behind the best header,",
+          "at height " <> shown b.headers <> ", within the " <> shown b.max <> " allowed."
+        ]
+  | otherwise =
+      T.unwords
+        [ "The database is " <> plural behind "block" <> " behind the best header,",
+          "at height " <> shown b.headers <> ", more than the " <> shown b.max <> " allowed:",
+          "the store is syncing, or cannot import blocks fast enough."
+        ]
+  where
+    behind = toInteger b.headers - toInteger b.blocks
+
+-- | What the check of the age of the best header found, for people.
+lastBlockText :: TimeHealth -> Text
+lastBlockText t
+  -- a header dated ahead of the clock, as miners may date them
+  | t.age <= 0 = "The best header is new, within the " <> duration t.max <> " allowed."
+  | isOK t =
+      T.unwords
+        [ "The best header is " <> duration t.age <> " old,",
+          "within the " <> duration t.max <> " allowed."
+        ]
+  | otherwise =
+      T.unwords
+        [ "The best header is " <> duration t.age <> " old,",
+          "more than the " <> duration t.max <> " allowed:",
+          "the store's peers may be stuck or behind, or the network has found no block for that long."
+        ]
+
+-- | What the check of the age of the last transaction or block found, for
+-- people.
+lastTxText :: TimeHealth -> Text
+lastTxText t
+  | t.age <= 0 = "A transaction or block came just now, within the " <> duration t.max <> " allowed."
+  | isOK t =
+      T.unwords
+        [ "The last transaction or block came " <> duration t.age <> " ago,",
+          "within the " <> duration t.max <> " allowed."
+        ]
+  | otherwise =
+      T.unwords
+        [ "No transaction or block came for " <> duration t.age <> ",",
+          "more than the " <> duration t.max <> " allowed:",
+          "the store may hear nothing from its peers."
+        ]
+
+-- | What the check of the transactions asked of peers found, for people.
+pendingTxsText :: MaxHealth -> Text
+pendingTxsText m
+  | isOK m =
+      T.unwords
+        [ plural m.count "transaction" <> " asked of peers " <> isAre <> " still to come,",
+          "within the " <> shown m.max <> " allowed."
+        ]
+  | otherwise =
+      T.unwords
+        [ plural m.count "transaction" <> " asked of peers " <> isAre <> " still to come,",
+          "more than the " <> shown m.max <> " allowed:",
+          "the peers do not send what the store asks for, or it cannot take it in fast enough."
+        ]
+  where
+    isAre = if m.count == 1 then "is" else "are"
+
+-- | What the check of the peers found, for people.
+peersText :: CountHealth -> Text
+peersText c
+  | isOK c = plural c.count "peer" <> " connected, and at least " <> shown c.min <> " needed."
+  | otherwise =
+      T.unwords
+        [ plural c.count "peer" <> " connected, fewer than the " <> shown c.min <> " needed:",
+          "the store hears too little of the network."
+        ]
+
+-- | What the check of the database found, a t'DatabaseHealth', for people:
+-- the state of the writes, the size of its files, and the work that RocksDB
+-- has in hand, of which only what there is.
+databaseText :: DatabaseHealth -> Text
+databaseText d =
+  T.unwords $
+    [ case d.writes of
+        WritesFlowing -> "RocksDB writes at full speed."
+        WritesDelayed ->
+          T.unwords
+            [ "RocksDB delays writes to " <> bytes d.delayedWriteRate <> " a second,",
+              "to let compactions catch up."
+            ]
+        WritesStopped -> "RocksDB stopped writes until compactions or flushes catch up: the store imports nothing.",
+      if d.size == 0
+        then "The database has written no files yet: what it holds is in memory."
+        else "Its files hold " <> bytes d.size <> ", " <> bytes d.liveData <> " of them live data.",
+      if null work
+        then "Nothing waits to be compacted or flushed."
+        else T.intercalate ", " work <> "."
+    ]
+      <> [ plural d.errors "error" <> " in the background since the database opened: see the log of the store."
+         | d.errors > 0
+         ]
+  where
+    -- what RocksDB has to do, without the parts that are nothing
+    work =
+      capitalised $
+        [bytes d.pendingCompaction <> " to compact" | d.pendingCompaction > 0]
+          <> [plural d.compactions "compaction" <> " running" | d.compactions > 0]
+          <> [plural d.flushes "flush" <> " running" | d.flushes > 0]
+          <> [plural d.memtables "full table" <> " in memory to flush" | d.memtables > 0]
+    capitalised (w : ws) = (T.toUpper (T.take 1 w) <> T.drop 1 w) : ws
+    capitalised [] = []
+
+-- | What the check of Redis found, for people: whether it answers.
+redisText :: Bool -> Text
+redisText True = "Redis answers."
+redisText False =
+  "Redis does not answer: the store knows no mempool and answers no request, with 503, until it is back."
+
+-- | A whole number in decimal, with its thousands set apart by commas, as
+-- people read them: @812,347@.
+shown :: (Integral a) => a -> Text
+shown n
+  | n < 0 = "-" <> shown (negate (toInteger n))
+  | otherwise = T.intercalate "," (groups (T.pack (show (toInteger n))))
+  where
+    groups t
+      | T.length t <= 3 = [t]
+      | otherwise = groups (T.dropEnd 3 t) <> [T.takeEnd 3 t]
+
+-- | A count of things, with the plural of the noun when it is not one:
+-- @plural 2 "peer"@ is @2 peers@.
+plural :: (Integral a) => a -> Text -> Text
+plural 1 noun = "1 " <> noun
+plural n noun
+  | "sh" `T.isSuffixOf` noun = shown n <> " " <> noun <> "es"
+  | otherwise = shown n <> " " <> noun <> "s"
+
+-- | Seconds in the largest unit that keeps them above one: @90@ is
+-- @1 minute@, @7200@ is @2 hours@. Whole units, rounded down, which is
+-- what a person reads at a glance.
+duration :: Int64 -> Text
+duration s
+  | s < 0 = "0 seconds"
+  | s < 60 = plural s "second"
+  | s < 3600 = plural (s `div` 60) "minute"
+  | s < 86400 = plural (s `div` 3600) "hour"
+  | otherwise = plural (s `div` 86400) "day"
+
+-- | Bytes in the largest unit of powers of 1,000 that keeps them above one,
+-- with one decimal: @70000000000@ is @70.0 GB@.
+bytes :: Word64 -> Text
+bytes n = case dropWhile ((> toInteger n) . fst) units of
+  (size, unit) : _ | size > 1 -> tenths (toInteger n * 10 `div` size) <> " " <> unit
+  _ -> plural n "byte"
+  where
+    units = [(10 ^ (12 :: Int), "TB"), (10 ^ (9 :: Int), "GB"), (10 ^ (6 :: Int), "MB"), (1000, "kB")]
+    tenths t = shown (t `div` 10) <> "." <> shown (t `mod` 10)
 
 -- | Event streamed by @\/events@.
 data Event

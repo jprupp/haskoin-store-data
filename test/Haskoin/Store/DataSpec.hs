@@ -14,6 +14,7 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.IntMap qualified as IntMap
 import Data.Maybe (fromJust, fromMaybe)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
 import Haskoin
 import Haskoin.Store.Data
@@ -98,8 +99,27 @@ spec = do
               network = "btc",
               version = "1.9.0",
               time = 1700000000,
-              redis = Nothing
+              redis = Nothing,
+              database = Nothing
             }
+        database =
+          DatabaseHealth
+            { writes = WritesFlowing,
+              pendingCompaction = 0,
+              delayedWriteRate = 0,
+              compactions = 0,
+              flushes = 1,
+              memtables = 0,
+              size = 70000000000,
+              liveData = 69000000000,
+              errors = 0
+            }
+        text key = \case
+          A.Object o ->
+            KeyMap.lookup key o >>= \case
+              A.Object c -> KeyMap.lookup "text" c
+              _ -> Nothing
+          _ -> Nothing
         without key = \case
           A.Object o -> A.Object (KeyMap.delete key o)
           v -> v
@@ -112,10 +132,91 @@ spec = do
       (A.fromJSON (badly (A.toJSON bare)) :: A.Result HealthCheck) `shouldSatisfy` \case
         A.Error _ -> True
         A.Success _ -> False
+    it "says in words what the whole store and each check found" $ do
+      let json = A.toJSON bare {database = Just database, redis = Just True}
+      json `shouldSatisfy` \case
+        A.Object o ->
+          KeyMap.lookup "text" o
+            == Just
+              ( A.String
+                  "The store is healthy: it has every block up to height 10, \
+                  \with 3 peers connected, and its Redis answers."
+              )
+        _ -> False
+      text "blocks" json `shouldBe` Just (A.String "The database has every block up to the best header, at height 10.")
+      text "peers" json `shouldBe` Just (A.String "3 peers connected, and at least 1 needed.")
+      text "redis" json `shouldBe` Just (A.String "Redis answers.")
+      text "database" json
+        `shouldBe` Just
+          ( A.String . T.unwords $
+              [ "RocksDB writes at full speed.",
+                "Its files hold 70.0 GB, 69.0 GB of them live data.",
+                "1 flush running."
+              ]
+          )
+    it "says what is wrong with a store that is not healthy, and nothing else" $ do
+      let sick = bare {blocks = BlockHealth 100 10 2, database = Just database {writes = WritesStopped}}
+      healthText sick
+        `shouldBe` T.unwords
+          [ "The store is not healthy.",
+            "The database is 90 blocks behind the best header, at height 100, more than the 2 allowed:",
+            "the store is syncing, or cannot import blocks fast enough.",
+            "RocksDB stopped writes until compactions or flushes catch up: the store imports nothing.",
+            "Its files hold 70.0 GB, 69.0 GB of them live data.",
+            "1 flush running."
+          ]
+      isOK bare {database = Just database {writes = WritesStopped}} `shouldBe` False
+      isOK bare {database = Just database {writes = WritesDelayed}} `shouldBe` True
+    it "writes numbers as people read them, and leaves out the work that is nothing" $ do
+      let busy = database {pendingCompaction = 1234567890123, compactions = 3, flushes = 0, memtables = 2}
+      databaseText busy
+        `shouldBe` T.unwords
+          [ "RocksDB writes at full speed.",
+            "Its files hold 70.0 GB, 69.0 GB of them live data.",
+            "1.2 TB to compact, 3 compactions running, 2 full tables in memory to flush."
+          ]
+      databaseText database {size = 0, liveData = 0, flushes = 0}
+        `shouldBe` "RocksDB writes at full speed. The database has written no files yet: \
+                   \what it holds is in memory. Nothing waits to be compacted or flushed."
+      pendingTxsText (MaxHealth 12345 10000)
+        `shouldBe` "12,345 transactions asked of peers are still to come, more than the 10,000 allowed: \
+                   \the peers do not send what the store asks for, or it cannot take it in fast enough."
+      lastBlockText (TimeHealth (-24) 14400) `shouldBe` "The best header is new, within the 4 hours allowed."
+    it "writes the example of the API reference of haskoin-store" $ do
+      let example =
+            HealthCheck
+              { blocks = BlockHealth 688798 688794 2,
+                lastBlock = TimeHealth 3279 7200,
+                lastTx = TimeHealth 0 300,
+                pendingTxs = MaxHealth 0 100,
+                peers = CountHealth 0 1,
+                network = "bch",
+                version = "2.0.0",
+                time = 1623666103,
+                redis = Just True,
+                database = Just database {size = 412000000000, liveData = 405300000000, flushes = 0}
+              }
+      healthText example
+        `shouldBe` T.unwords
+          [ "The store is not healthy. The database is 4 blocks behind the best",
+            "header, at height 688,798, more than the 2 allowed: the store is",
+            "syncing, or cannot import blocks fast enough. 0 peers connected,",
+            "fewer than the 1 needed: the store hears too little of the network."
+          ]
+      lastBlockText example.lastBlock `shouldBe` "The best header is 54 minutes old, within the 2 hours allowed."
+      lastTxText example.lastTx `shouldBe` "A transaction or block came just now, within the 5 minutes allowed."
+      pendingTxsText example.pendingTxs
+        `shouldBe` "0 transactions asked of peers are still to come, within the 100 allowed."
+      fmap databaseText example.database
+        `shouldBe` Just
+          "RocksDB writes at full speed. Its files hold 412.0 GB, 405.3 GB of \
+          \them live data. Nothing waits to be compacted or flushed."
+    it "reads what a store wrote before the database had a check" $ do
+      A.fromJSON (without "database" (A.toJSON bare {database = Just database})) `shouldBe` A.Success bare
     it "is fit to serve without its Redis, and says that it is without" $ do
       isOK bare {redis = Just False} `shouldBe` True
       A.toJSON bare {redis = Just False} `shouldSatisfy` \case
-        A.Object o -> KeyMap.lookup "redis" o == Just (A.object ["ok" A..= False])
+        A.Object o -> KeyMap.lookup "redis" o == Just (A.object ["ok" A..= False, "text" A..= redisText False])
         _ -> False
       A.toJSON bare `shouldSatisfy` \case
         A.Object o -> not (KeyMap.member "redis" o)

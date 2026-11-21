@@ -157,10 +157,27 @@ instance Arbitrary MaxHealth where
       <$> arbitrary
       <*> arbitrary
 
+instance Arbitrary DatabaseWrites where
+  arbitrary = arbitraryBoundedEnum
+
+instance Arbitrary DatabaseHealth where
+  arbitrary =
+    DatabaseHealth
+      <$> arbitrary
+      <*> arbitrary
+      <*> arbitrary
+      <*> arbitrary
+      <*> arbitrary
+      <*> arbitrary
+      <*> arbitrary
+      <*> arbitrary
+      <*> arbitrary
+
 instance Arbitrary HealthCheck where
   arbitrary =
     HealthCheck
       <$> arbitrary
+      <*> arbitrary
       <*> arbitrary
       <*> arbitrary
       <*> arbitrary
