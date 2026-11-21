@@ -108,6 +108,7 @@ module Haskoin.Store.Data
     MaxHealth (..),
     DatabaseWrites (..),
     DatabaseHealth (..),
+    MempoolHealth (..),
     HealthCheck (..),
     healthText,
     blocksText,
@@ -116,6 +117,7 @@ module Haskoin.Store.Data
     pendingTxsText,
     peersText,
     databaseText,
+    mempoolText,
     redisText,
     Event (..),
     EventCommand (..),
@@ -1944,6 +1946,57 @@ instance FromJSON DatabaseHealth where
       errors <- o .: "background-errors"
       return DatabaseHealth {..}
 
+-- | How the store stands with the mempool of its nodes: whether it can
+-- read one whole again, and what is on its way to the shared mempool.
+--
+-- A node announces a transaction to a peer once. A store that misses one,
+-- because it was away, or behind, or had no room, gets it back only by
+-- reading the whole mempool of a node again, and what lets it do that is a
+-- /source/: a peer whose node allows it, or the RPC of a node. Bitcoin
+-- Core allows it to a peer that it whitelists with the permission
+-- @mempool@, or when it serves Bloom filters; Bitcoin Cash Node serves
+-- them by default.
+--
+-- A store with no source is not unhealthy: it answers every request, and a
+-- store whose peers are all strangers on Bitcoin has none by nature. So
+-- this is no check that passes or fails, and it has no @ok@. It is what an
+-- operator needs to see when a store shows fewer transactions than a node.
+data MempoolHealth = MempoolHealth
+  { -- | what the store can read a whole mempool from: peers that give
+    -- theirs when asked, and the RPC of a node while it answers
+    sources :: !Word32,
+    -- | whether the store may have missed transactions that a node has,
+    -- and has not read a source since: it gave some up, it dropped
+    -- messages of its peers, or the shared mempool lost what it had
+    dirty :: !Bool,
+    -- | transaction ids on their way to the shared mempool: wanted,
+    -- asked of a peer, or held
+    known :: !Word32,
+    -- | transactions held: being offered, or waiting for one that they
+    -- spend from
+    held :: !Word32
+  }
+  deriving (Show, Eq, Generic, NFData)
+
+instance ToJSON MempoolHealth where
+  toJSON m =
+    A.object
+      [ "sources" .= m.sources,
+        "dirty" .= m.dirty,
+        "known" .= m.known,
+        "held" .= m.held,
+        "text" .= mempoolText m
+      ]
+
+instance FromJSON MempoolHealth where
+  parseJSON =
+    A.withObject "MempoolHealth" $ \o -> do
+      sources <- o .: "sources"
+      dirty <- o .: "dirty"
+      known <- o .: "known"
+      held <- o .: "held"
+      return MempoolHealth {..}
+
 -- | Health of the store, as returned by @\/health@. It is healthy if every check
 -- passes.
 --
@@ -1978,7 +2031,10 @@ data HealthCheck = HealthCheck
     -- none
     redis :: !(Maybe Bool),
     -- | the state of the database; 'Nothing' from a store from before it
-    database :: !(Maybe DatabaseHealth)
+    database :: !(Maybe DatabaseHealth),
+    -- | how the store stands with the mempool of its nodes; 'Nothing'
+    -- from a store from before it. It is not one of the checks.
+    mempool :: !(Maybe MempoolHealth)
   }
   deriving (Show, Eq, Generic, NFData)
 
@@ -2009,6 +2065,7 @@ instance ToJSON HealthCheck where
       ]
         <> ["redis" .= A.object ["ok" .= up, "text" .= redisText up] | Just up <- [h.redis]]
         <> ["database" .= d | Just d <- [h.database]]
+        <> ["mempool" .= m | Just m <- [h.mempool]]
     where
       -- the JSON of a check with what it means: the text depends on which
       -- check it is, so it is added here and not by the check's own JSON
@@ -2032,6 +2089,7 @@ instance FromJSON HealthCheck where
       time <- maybe (fail "A time before 1970, or too far ahead") return (unixSeconds utcTime)
       redis <- o .:? "redis" >>= mapM (.: "ok")
       database <- o .:? "database"
+      mempool <- o .:? "mempool"
       return HealthCheck {..}
 
 -- | What the health check says of the whole store, in a sentence or two for
@@ -2058,6 +2116,7 @@ healthText h
             _ -> "."
         ]
           <> [slow | Just d <- [h.database], d.writes == WritesDelayed]
+          <> [noSourceText | Just m <- [h.mempool], m.sources == 0]
   | otherwise = "The store is not healthy. " <> T.unwords problems
   where
     slow = "RocksDB delays writes while it compacts the database."
@@ -2189,6 +2248,41 @@ databaseText d =
           <> [plural d.memtables "full table" <> " in memory to flush" | d.memtables > 0]
     capitalised (w : ws) = (T.toUpper (T.take 1 w) <> T.drop 1 w) : ws
     capitalised [] = []
+
+-- | What a store with no source has to say, in 'healthText' and in
+-- 'mempoolText'.
+noSourceText :: Text
+noSourceText =
+  "The store has nothing to read a whole mempool from again, no peer that gives its \
+  \own and no RPC of a node: a transaction that it misses stays missed until a block has it."
+
+-- | How the store stands with the mempool of its nodes, a
+-- t'MempoolHealth', for people.
+mempoolText :: MempoolHealth -> Text
+mempoolText m =
+  T.unwords $
+    [ if m.sources == 0
+        then noSourceText
+        else
+          "The store has "
+            <> plural m.sources "source"
+            <> " to read a whole mempool from again, which it does when it may have missed a transaction."
+    ]
+      <> [ if m.sources == 0
+             then "It may have missed some."
+             else "It may have missed some, and is about to read again."
+         | m.dirty
+         ]
+      <> [ T.unwords
+             [ plural m.known "transaction",
+               isAre,
+               "on the way to the shared mempool,",
+               shown m.held <> " held."
+             ]
+         | m.known > 0
+         ]
+  where
+    isAre = if m.known == 1 then "is" else "are"
 
 -- | What the check of Redis found, for people: whether it answers.
 redisText :: Bool -> Text

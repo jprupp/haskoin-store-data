@@ -33,6 +33,14 @@ haskoin-store 2.0.0, on haskoin-core 3.0.
   a program should read `ok` and the numbers, since the wording may change.
   The texts are written and not read back, so a `HealthCheck` reads the
   same with or without them.
+- **`MempoolHealth`, how the store stands with the mempool of its nodes**,
+  in a new field `mempool` of `HealthCheck`: how many sources it has to
+  read a whole mempool from again (peers that give theirs when asked, and
+  the RPC of a node), whether it may have missed transactions and has not
+  read a source since, and how many transaction ids are on their way to
+  the shared mempool and held. It is no check: a store with no source is
+  healthy, and the `text` of the whole store says what it lacks.
+  `mempoolText` writes it.
 - **`DatabaseHealth`, the state of the store's database**, in a new field
   `database` of `HealthCheck`: whether RocksDB lets writes through
   (`DatabaseWrites`: flowing, delayed or stopped), the compaction pending,
@@ -43,9 +51,10 @@ haskoin-store 2.0.0, on haskoin-core 3.0.
   its JSON before, outside the type, where a client could not read it.
 
 ### Changed
-- **Breaking: `HealthCheck` has a field `database`** (`Maybe
-  DatabaseHealth`), so code that builds one has to give it. In JSON it may
-  be missing, as in the output of an older store, and reads as `Nothing`.
+- **Breaking: `HealthCheck` has two new fields, `database`** (`Maybe
+  DatabaseHealth`) **and `mempool`** (`Maybe MempoolHealth`), so code that
+  builds one has to give them. In JSON they may be missing, as in the
+  output of an older store, and read as `Nothing`.
 - **The client reaches a store on a Unix socket.** `ApiConfig` has a new
   field, `socket`: when it names one, every request goes to it, whatever
   host the URL names, as a store serves with `--socket`. The tests of the

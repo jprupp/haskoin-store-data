@@ -173,10 +173,14 @@ instance Arbitrary DatabaseHealth where
       <*> arbitrary
       <*> arbitrary
 
+instance Arbitrary MempoolHealth where
+  arbitrary = MempoolHealth <$> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary
+
 instance Arbitrary HealthCheck where
   arbitrary =
     HealthCheck
       <$> arbitrary
+      <*> arbitrary
       <*> arbitrary
       <*> arbitrary
       <*> arbitrary

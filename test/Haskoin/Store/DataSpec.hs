@@ -100,7 +100,8 @@ spec = do
               version = "1.9.0",
               time = 1700000000,
               redis = Nothing,
-              database = Nothing
+              database = Nothing,
+              mempool = Nothing
             }
         database =
           DatabaseHealth
@@ -194,7 +195,8 @@ spec = do
                 version = "2.0.0",
                 time = 1623666103,
                 redis = Just True,
-                database = Just database {size = 412000000000, liveData = 405300000000, flushes = 0}
+                database = Just database {size = 412000000000, liveData = 405300000000, flushes = 0},
+                mempool = Just (MempoolHealth 1 False 0 0)
               }
       healthText example
         `shouldBe` T.unwords
@@ -211,6 +213,30 @@ spec = do
         `shouldBe` Just
           "RocksDB writes at full speed. Its files hold 412.0 GB, 405.3 GB of \
           \them live data. Nothing waits to be compacted or flushed."
+    it "says how the store stands with the mempool of its nodes, which is no check" $ do
+      let alone = MempoolHealth {sources = 0, dirty = True, known = 3, held = 1}
+          sourced = MempoolHealth {sources = 2, dirty = False, known = 0, held = 0}
+      mempoolText sourced
+        `shouldBe` "The store has 2 sources to read a whole mempool from again, \
+                   \which it does when it may have missed a transaction."
+      mempoolText sourced {dirty = True, sources = 1}
+        `shouldBe` "The store has 1 source to read a whole mempool from again, \
+                   \which it does when it may have missed a transaction. \
+                   \It may have missed some, and is about to read again."
+      mempoolText alone
+        `shouldBe` "The store has nothing to read a whole mempool from again, \
+                   \no peer that gives its own and no RPC of a node: \
+                   \a transaction that it misses stays missed until a block has it. \
+                   \It may have missed some. \
+                   \3 transactions are on the way to the shared mempool, 1 held."
+      -- a store with no source is healthy, and says what it lacks
+      isOK bare {mempool = Just alone} `shouldBe` True
+      healthText bare {mempool = Just alone}
+        `shouldBe` "The store is healthy: it has every block up to height 10, with 3 peers connected. \
+                   \The store has nothing to read a whole mempool from again, \
+                   \no peer that gives its own and no RPC of a node: \
+                   \a transaction that it misses stays missed until a block has it."
+      A.fromJSON (without "mempool" (A.toJSON bare {mempool = Just alone})) `shouldBe` A.Success bare
     it "reads what a store wrote before the database had a check" $ do
       A.fromJSON (without "database" (A.toJSON bare {database = Just database})) `shouldBe` A.Success bare
     it "is fit to serve without its Redis, and says that it is without" $ do
