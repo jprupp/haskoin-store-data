@@ -173,6 +173,9 @@ instance Arbitrary DatabaseHealth where
       <*> arbitrary
       <*> arbitrary
 
+instance Arbitrary MempoolSync where
+  arbitrary = arbitraryBoundedEnum
+
 instance Arbitrary MempoolHealth where
   arbitrary = MempoolHealth <$> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary
 

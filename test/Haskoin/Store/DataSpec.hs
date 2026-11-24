@@ -197,7 +197,7 @@ spec = do
                 time = 1623666103,
                 redis = Just True,
                 database = Just database {size = 412000000000, liveData = 405300000000, flushes = 0},
-                mempool = Just (MempoolHealth 1 False 0 0 False),
+                mempool = Just (MempoolHealth 1 False 0 0 MempoolSynced),
                 warnings = []
               }
       healthText example
@@ -216,8 +216,8 @@ spec = do
           "RocksDB writes at full speed. Its files hold 412.0 GB, 405.3 GB of \
           \them live data. Nothing waits to be compacted or flushed."
     it "says how the store stands with the mempool of its nodes, which is no check" $ do
-      let alone = MempoolHealth {sources = 0, dirty = True, known = 3, held = 1, filling = False}
-          sourced = MempoolHealth {sources = 2, dirty = False, known = 0, held = 0, filling = False}
+      let alone = MempoolHealth {sources = 0, dirty = True, known = 3, held = 1, sync = MempoolUnknown}
+          sourced = MempoolHealth {sources = 2, dirty = False, known = 0, held = 0, sync = MempoolSynced}
       mempoolText sourced
         `shouldBe` "The store has 2 sources to read a whole mempool from again, \
                    \which it does when it may have missed a transaction."
@@ -249,17 +249,27 @@ spec = do
       healthText quiet `shouldBe` healthText bare
       -- behind on its blocks, it is not
       isOK (quiet {blocks = BlockHealth 100 10 2} :: HealthCheck) `shouldBe` False
-    it "says whether the mempool is still filling, which is no check either" $ do
-      let filling = MempoolHealth {sources = 1, dirty = False, known = 60000, held = 20000, filling = True}
-      isOK bare {mempool = Just filling} `shouldBe` True
-      healthText bare {mempool = Just filling}
+    it "says how the mempool stands in one word, which is no check either" $ do
+      let syncing = MempoolHealth {sources = 1, dirty = False, known = 60000, held = 20000, sync = MempoolSyncing}
+      isOK bare {mempool = Just syncing} `shouldBe` True
+      healthText bare {mempool = Just syncing}
         `shouldBe` "The store is healthy: it has every block up to height 10, with 3 peers connected. \
-                   \Its mempool is still filling: it has not yet taken in all that its sources have, \
+                   \Its mempool is still syncing: it has not yet taken in all that its nodes have, \
                    \and shows fewer unconfirmed transactions than its node until it has."
-      mempoolText filling `shouldSatisfy` T.isInfixOf "Its mempool is still filling"
-      A.fromJSON (A.toJSON filling) `shouldBe` A.Success filling
-      -- a store from before the field says nothing of it: not filling
-      A.fromJSON (without "filling" (A.toJSON filling)) `shouldBe` A.Success filling {filling = False}
+      mempoolText syncing `shouldSatisfy` T.isInfixOf "Its mempool is still syncing"
+      -- among strangers, the store cannot tell, and says so
+      mempoolText syncing {sync = MempoolUnknown} `shouldSatisfy` T.isInfixOf "cannot tell"
+      mempoolText syncing {sync = MempoolSynced} `shouldSatisfy` (not . T.isInfixOf "syncing")
+      -- one word in lower case each
+      map A.toJSON [MempoolSyncing, MempoolSynced, MempoolUnknown]
+        `shouldBe` map A.String ["syncing", "synced", "unknown"]
+      forM_ [minBound .. maxBound :: MempoolSync] $ \s -> A.fromJSON (A.toJSON s) `shouldBe` A.Success s
+      (A.fromJSON (A.String "full") :: A.Result MempoolSync) `shouldSatisfy` \case
+        A.Error _ -> True
+        A.Success _ -> False
+      A.fromJSON (A.toJSON syncing) `shouldBe` A.Success syncing
+      -- a store from before the field says nothing of it: unknown
+      A.fromJSON (without "sync" (A.toJSON syncing)) `shouldBe` A.Success syncing {sync = MempoolUnknown}
     it "says what the operator should put right, which is no check either" $ do
       let warned = bare {warnings = ["The store lacks something"]} :: HealthCheck
       isOK warned `shouldBe` True

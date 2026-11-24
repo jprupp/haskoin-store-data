@@ -25,15 +25,18 @@ by field or by position: each has one field more.
 
 ### Added
 
-- **`filling` in `MempoolHealth`**, and in the `mempool` object of
-  `/health`: whether the shared mempool is still filling. A store that has
-  a source, and that has not yet read its sources and taken in all that
-  they named since it started or since the shared mempool lost what it
-  had, shows fewer unconfirmed transactions than its node. It is healthy
-  meanwhile, and this says so to whoever looks: an operator, or a deploy
-  that waits for it before giving the store traffic. `mempoolText` and
-  `healthText` say it in words. The field reads as `False` from a store
-  from before it.
+- **`sync` in `MempoolHealth`**, and in the `mempool` object of
+  `/health`: how the shared mempool stands with the mempools of the nodes
+  of the operator, in one word (`MempoolSync`). `syncing`: the store has
+  such a node to read a whole mempool from, and has not yet read it and
+  taken in all that it named, since it started or since the shared mempool
+  lost what it had. `synced`: it has. `unknown`: it has no such node, only
+  strangers or nobody, and cannot tell. A store is healthy in all three,
+  and this says how it stands to whoever looks: an operator, or a deploy
+  that waits for `synced` before giving the store traffic. `mempoolText`
+  and `healthText` say it in words. The field reads as `unknown` from a
+  store from before it. It was first a boolean, `filling`, for a few
+  hours: a store among strangers said that it was filling for ever.
 - **`warnings` in `HealthCheck`**, and in the JSON of `/health` when there
   are any: what the operator of a store should put right in how it is set
   up, a sentence each. A warning is not a check, and a store with warnings

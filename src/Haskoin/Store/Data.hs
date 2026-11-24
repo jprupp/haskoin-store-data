@@ -110,6 +110,8 @@ module Haskoin.Store.Data
     DatabaseHealth (..),
     MempoolHealth (..),
     HealthCheck (..),
+    MempoolSync (..),
+    mempoolSyncWord,
     healthText,
     blocksText,
     lastBlockText,
@@ -1975,16 +1977,50 @@ data MempoolHealth = MempoolHealth
     -- | transactions held: being offered, or waiting for one that they
     -- spend from
     held :: !Word32,
-    -- | whether the shared mempool is still filling: the store has a
-    -- source, and since it started, or since the shared mempool lost what
-    -- it had, it has not yet read its sources and taken in all that they
-    -- named. Until then the store shows fewer unconfirmed transactions
-    -- than its node has. A store with no source has nothing to fill from,
-    -- and this is 'False' of it. It reads as 'False' from a store from
-    -- before the field.
-    filling :: !Bool
+    -- | how the shared mempool stands with the mempools of the nodes of
+    -- the operator, a t'MempoolSync'. It reads as 'MempoolUnknown' from a
+    -- store from before the field.
+    sync :: !MempoolSync
   }
   deriving (Show, Eq, Generic, NFData)
+
+-- | How the shared mempool stands with the mempools of the nodes that the
+-- operator of a store trusts, in one word: @sync@ in the JSON of a
+-- t'MempoolHealth'.
+--
+-- It was a boolean once, whether the mempool is still filling. A store
+-- whose peers are all strangers cannot say either: what a stranger names
+-- is not what the mempool should have, so there is nothing to measure it
+-- against, and such a store said that it was filling for ever.
+data MempoolSync
+  = -- | @syncing@: the store has a node of its operator to read a whole
+    -- mempool from, and since it started, or since the shared mempool
+    -- lost what it had, it has not yet read every such node and taken in
+    -- all that they named. Until then it shows fewer unconfirmed
+    -- transactions than its node has.
+    MempoolSyncing
+  | -- | @synced@: it has
+    MempoolSynced
+  | -- | @unknown@: the store has no node of its operator to read a whole
+    -- mempool from, only strangers or nobody, and cannot tell
+    MempoolUnknown
+  deriving (Show, Eq, Ord, Enum, Bounded, Generic, NFData)
+
+instance ToJSON MempoolSync where
+  toJSON = A.String . mempoolSyncWord
+
+instance FromJSON MempoolSync where
+  parseJSON = A.withText "MempoolSync" $ \t ->
+    case [s | s <- [minBound .. maxBound], mempoolSyncWord s == t] of
+      [s] -> return s
+      _ -> fail ("Not a state of the mempool: " <> T.unpack t)
+
+-- | The word of a t'MempoolSync' in JSON: one word, in lower case.
+mempoolSyncWord :: MempoolSync -> Text
+mempoolSyncWord = \case
+  MempoolSyncing -> "syncing"
+  MempoolSynced -> "synced"
+  MempoolUnknown -> "unknown"
 
 instance ToJSON MempoolHealth where
   toJSON m =
@@ -1993,7 +2029,7 @@ instance ToJSON MempoolHealth where
         "dirty" .= m.dirty,
         "known" .= m.known,
         "held" .= m.held,
-        "filling" .= m.filling,
+        "sync" .= m.sync,
         "text" .= mempoolText m
       ]
 
@@ -2004,7 +2040,7 @@ instance FromJSON MempoolHealth where
       dirty <- o .: "dirty"
       known <- o .: "known"
       held <- o .: "held"
-      filling <- o .:? "filling" .!= False
+      sync <- o .:? "sync" .!= MempoolUnknown
       return MempoolHealth {..}
 
 -- | Health of the store, as returned by @\/health@. It is healthy if it
@@ -2021,7 +2057,7 @@ instance FromJSON MempoolHealth where
 -- its own @ok@, and the health of the store does not depend on them. They
 -- did decide it once, and a store was taken out of service for the state
 -- of its mempool while it had every block. What an operator wants to know
--- of the mempool is in 'mempool', and 'filling' above all.
+-- of the mempool is in 'mempool', and 'sync' above all.
 --
 -- The check of Redis is not one of them. A store that has a Redis cache and
 -- cannot reach it still answers every request, from its own database, so it
@@ -2149,7 +2185,7 @@ healthText h
         ]
           <> [slow | Just d <- [h.database], d.writes == WritesDelayed]
           <> [noSourceText | Just m <- [h.mempool], m.sources == 0]
-          <> [fillingText | Just m <- [h.mempool], m.filling]
+          <> [syncingText | Just m <- [h.mempool], m.sync == MempoolSyncing]
           <> warned
   | otherwise = "The store is not healthy. " <> T.unwords (problems <> warned)
   where
@@ -2289,11 +2325,17 @@ noSourceText =
   "The store has nothing to read a whole mempool from again, no peer that gives its \
   \own and no RPC of a node: a transaction that it misses stays missed until a block has it."
 
--- | What is said of a store whose shared mempool is still filling.
-fillingText :: Text
-fillingText =
-  "Its mempool is still filling: it has not yet taken in all that its sources have, \
+-- | What is said of a store whose shared mempool is still syncing.
+syncingText :: Text
+syncingText =
+  "Its mempool is still syncing: it has not yet taken in all that its nodes have, \
   \and shows fewer unconfirmed transactions than its node until it has."
+
+-- | What is said of a store that cannot tell how its mempool stands.
+unknownSyncText :: Text
+unknownSyncText =
+  "It has no node of its operator to measure its mempool against, \
+  \and cannot tell whether it has all that a node has."
 
 -- | How the store stands with the mempool of its nodes, a
 -- t'MempoolHealth', for people.
@@ -2320,7 +2362,8 @@ mempoolText m =
              ]
          | m.known > 0
          ]
-      <> [fillingText | m.filling]
+      <> [syncingText | m.sync == MempoolSyncing]
+      <> [unknownSyncText | m.sync == MempoolUnknown, m.sources > 0]
   where
     isAre = if m.known == 1 then "is" else "are"
 
