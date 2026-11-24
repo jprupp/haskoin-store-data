@@ -174,7 +174,7 @@ instance Arbitrary DatabaseHealth where
       <*> arbitrary
 
 instance Arbitrary MempoolHealth where
-  arbitrary = MempoolHealth <$> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary
+  arbitrary = MempoolHealth <$> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary
 
 instance Arbitrary HealthCheck where
   arbitrary =

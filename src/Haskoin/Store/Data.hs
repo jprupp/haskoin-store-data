@@ -1974,7 +1974,15 @@ data MempoolHealth = MempoolHealth
     known :: !Word32,
     -- | transactions held: being offered, or waiting for one that they
     -- spend from
-    held :: !Word32
+    held :: !Word32,
+    -- | whether the shared mempool is still filling: the store has a
+    -- source, and since it started, or since the shared mempool lost what
+    -- it had, it has not yet read its sources and taken in all that they
+    -- named. Until then the store shows fewer unconfirmed transactions
+    -- than its node has. A store with no source has nothing to fill from,
+    -- and this is 'False' of it. It reads as 'False' from a store from
+    -- before the field.
+    filling :: !Bool
   }
   deriving (Show, Eq, Generic, NFData)
 
@@ -1985,6 +1993,7 @@ instance ToJSON MempoolHealth where
         "dirty" .= m.dirty,
         "known" .= m.known,
         "held" .= m.held,
+        "filling" .= m.filling,
         "text" .= mempoolText m
       ]
 
@@ -1995,10 +2004,24 @@ instance FromJSON MempoolHealth where
       dirty <- o .: "dirty"
       known <- o .: "known"
       held <- o .: "held"
+      filling <- o .:? "filling" .!= False
       return MempoolHealth {..}
 
--- | Health of the store, as returned by @\/health@. It is healthy if every check
--- passes.
+-- | Health of the store, as returned by @\/health@. It is healthy if it
+-- has the blocks of its nodes: the database keeps up with the headers,
+-- the best header is recent, enough peers are connected, and the database
+-- takes writes ('isOK').
+--
+-- Nothing of the mempool decides it. A store that is at the head of the
+-- chain answers every request rightly from what it has, whatever the
+-- state of its mempool: one that just started and is still filling it,
+-- one whose node has gone quiet, one that waits for transactions that it
+-- asked for. The two checks that look at transactions, 'lastTx' and
+-- 'pendingTxs', are still made and still say whether they pass, each with
+-- its own @ok@, and the health of the store does not depend on them. They
+-- did decide it once, and a store was taken out of service for the state
+-- of its mempool while it had every block. What an operator wants to know
+-- of the mempool is in 'mempool', and 'filling' above all.
 --
 -- The check of Redis is not one of them. A store that has a Redis cache and
 -- cannot reach it still answers every request, from its own database, so it
@@ -2043,8 +2066,6 @@ instance Healthy HealthCheck where
     and
       [ isOK h.blocks,
         isOK h.lastBlock,
-        isOK h.lastTx,
-        isOK h.pendingTxs,
         isOK h.peers,
         all isOK h.database
       ]
@@ -2117,14 +2138,13 @@ healthText h
         ]
           <> [slow | Just d <- [h.database], d.writes == WritesDelayed]
           <> [noSourceText | Just m <- [h.mempool], m.sources == 0]
+          <> [fillingText | Just m <- [h.mempool], m.filling]
   | otherwise = "The store is not healthy. " <> T.unwords problems
   where
     slow = "RocksDB delays writes while it compacts the database."
     problems =
       [blocksText h.blocks | not (isOK h.blocks)]
         <> [lastBlockText h.lastBlock | not (isOK h.lastBlock)]
-        <> [lastTxText h.lastTx | not (isOK h.lastTx)]
-        <> [pendingTxsText h.pendingTxs | not (isOK h.pendingTxs)]
         <> [peersText h.peers | not (isOK h.peers)]
         <> [databaseText d | Just d <- [h.database], not (isOK d)]
         <> [redisText False | h.redis == Just False]
@@ -2256,6 +2276,12 @@ noSourceText =
   "The store has nothing to read a whole mempool from again, no peer that gives its \
   \own and no RPC of a node: a transaction that it misses stays missed until a block has it."
 
+-- | What is said of a store whose shared mempool is still filling.
+fillingText :: Text
+fillingText =
+  "Its mempool is still filling: it has not yet taken in all that its sources have, \
+  \and shows fewer unconfirmed transactions than its node until it has."
+
 -- | How the store stands with the mempool of its nodes, a
 -- t'MempoolHealth', for people.
 mempoolText :: MempoolHealth -> Text
@@ -2281,6 +2307,7 @@ mempoolText m =
              ]
          | m.known > 0
          ]
+      <> [fillingText | m.filling]
   where
     isAre = if m.known == 1 then "is" else "are"
 

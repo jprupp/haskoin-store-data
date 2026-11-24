@@ -6,6 +6,35 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+This breaks code that builds a `MempoolHealth` field by field or by
+position, which has one field more.
+
+### Changed
+
+- **A store is healthy whatever the state of its mempool.** `isOK` of a
+  `HealthCheck`, and so `ok` in the JSON of `/health`, no longer depends on
+  the two checks that look at transactions: `lastTx`, that one came lately,
+  and `pendingTxs`, that few are asked for and not received. A store that
+  has the blocks of its nodes answers every request rightly from what it
+  has, and it was taken out of service for the state of its mempool while
+  it had every block. Both checks are still made, each with its own `ok`
+  and `text`; `healthText` no longer counts either among what is wrong.
+  The health of a store is now: its database keeps up with the headers, the
+  best header is recent, enough peers are connected, and the database
+  takes writes.
+
+### Added
+
+- **`filling` in `MempoolHealth`**, and in the `mempool` object of
+  `/health`: whether the shared mempool is still filling. A store that has
+  a source, and that has not yet read its sources and taken in all that
+  they named since it started or since the shared mempool lost what it
+  had, shows fewer unconfirmed transactions than its node. It is healthy
+  meanwhile, and this says so to whoever looks: an operator, or a deploy
+  that waits for it before giving the store traffic. `mempoolText` and
+  `healthText` say it in words. The field reads as `False` from a store
+  from before it.
+
 ## [4.0.0] - 2026-11-22
 
 The types and requests of the tokens of Bitcoin Cash (CashTokens), for

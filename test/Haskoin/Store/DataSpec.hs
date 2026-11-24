@@ -196,7 +196,7 @@ spec = do
                 time = 1623666103,
                 redis = Just True,
                 database = Just database {size = 412000000000, liveData = 405300000000, flushes = 0},
-                mempool = Just (MempoolHealth 1 False 0 0)
+                mempool = Just (MempoolHealth 1 False 0 0 False)
               }
       healthText example
         `shouldBe` T.unwords
@@ -214,8 +214,8 @@ spec = do
           "RocksDB writes at full speed. Its files hold 412.0 GB, 405.3 GB of \
           \them live data. Nothing waits to be compacted or flushed."
     it "says how the store stands with the mempool of its nodes, which is no check" $ do
-      let alone = MempoolHealth {sources = 0, dirty = True, known = 3, held = 1}
-          sourced = MempoolHealth {sources = 2, dirty = False, known = 0, held = 0}
+      let alone = MempoolHealth {sources = 0, dirty = True, known = 3, held = 1, filling = False}
+          sourced = MempoolHealth {sources = 2, dirty = False, known = 0, held = 0, filling = False}
       mempoolText sourced
         `shouldBe` "The store has 2 sources to read a whole mempool from again, \
                    \which it does when it may have missed a transaction."
@@ -237,6 +237,27 @@ spec = do
                    \no peer that gives its own and no RPC of a node: \
                    \a transaction that it misses stays missed until a block has it."
       A.fromJSON (without "mempool" (A.toJSON bare {mempool = Just alone})) `shouldBe` A.Success bare
+    it "is healthy at the head of the chain, whatever the state of the mempool" $ do
+      -- no transaction for an hour, and more asked for than allowed: each
+      -- check says so, and the store is healthy
+      let quiet = bare {lastTx = TimeHealth 3600 300, pendingTxs = MaxHealth 20000 10000}
+      isOK quiet.lastTx `shouldBe` False
+      isOK quiet.pendingTxs `shouldBe` False
+      isOK quiet `shouldBe` True
+      healthText quiet `shouldBe` healthText bare
+      -- behind on its blocks, it is not
+      isOK (quiet {blocks = BlockHealth 100 10 2} :: HealthCheck) `shouldBe` False
+    it "says whether the mempool is still filling, which is no check either" $ do
+      let filling = MempoolHealth {sources = 1, dirty = False, known = 60000, held = 20000, filling = True}
+      isOK bare {mempool = Just filling} `shouldBe` True
+      healthText bare {mempool = Just filling}
+        `shouldBe` "The store is healthy: it has every block up to height 10, with 3 peers connected. \
+                   \Its mempool is still filling: it has not yet taken in all that its sources have, \
+                   \and shows fewer unconfirmed transactions than its node until it has."
+      mempoolText filling `shouldSatisfy` T.isInfixOf "Its mempool is still filling"
+      A.fromJSON (A.toJSON filling) `shouldBe` A.Success filling
+      -- a store from before the field says nothing of it: not filling
+      A.fromJSON (without "filling" (A.toJSON filling)) `shouldBe` A.Success filling {filling = False}
     it "reads what a store wrote before the database had a check" $ do
       A.fromJSON (without "database" (A.toJSON bare {database = Just database})) `shouldBe` A.Success bare
     it "is fit to serve without its Redis, and says that it is without" $ do
