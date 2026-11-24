@@ -2033,6 +2033,12 @@ instance FromJSON MempoolHealth where
 -- The field may be missing in the JSON, where it reads as 'Nothing'. So the output of a store
 -- from before the field can still be read, and a client from before it
 -- reads the output of a new store.
+--
+-- 'warnings' are not checks either. A warning is something about how the
+-- store is set up that its operator should put right, and that does not
+-- keep it from answering rightly: a store that has the RPC of its node
+-- and not its ZeroMQ socket. It is a sentence for people, and it is in
+-- 'healthText' too.
 data HealthCheck = HealthCheck
   { -- | the database keeps up with the headers
     blocks :: !BlockHealth,
@@ -2057,7 +2063,10 @@ data HealthCheck = HealthCheck
     database :: !(Maybe DatabaseHealth),
     -- | how the store stands with the mempool of its nodes; 'Nothing'
     -- from a store from before it. It is not one of the checks.
-    mempool :: !(Maybe MempoolHealth)
+    mempool :: !(Maybe MempoolHealth),
+    -- | what the operator should put right in how the store is set up, a
+    -- sentence each; none from a store from before it. Not checks.
+    warnings :: ![Text]
   }
   deriving (Show, Eq, Generic, NFData)
 
@@ -2087,6 +2096,7 @@ instance ToJSON HealthCheck where
         <> ["redis" .= A.object ["ok" .= up, "text" .= redisText up] | Just up <- [h.redis]]
         <> ["database" .= d | Just d <- [h.database]]
         <> ["mempool" .= m | Just m <- [h.mempool]]
+        <> ["warnings" .= h.warnings | not (null h.warnings)]
     where
       -- the JSON of a check with what it means: the text depends on which
       -- check it is, so it is added here and not by the check's own JSON
@@ -2111,6 +2121,7 @@ instance FromJSON HealthCheck where
       redis <- o .:? "redis" >>= mapM (.: "ok")
       database <- o .:? "database"
       mempool <- o .:? "mempool"
+      warnings <- o .:? "warnings" .!= []
       return HealthCheck {..}
 
 -- | What the health check says of the whole store, in a sentence or two for
@@ -2139,9 +2150,11 @@ healthText h
           <> [slow | Just d <- [h.database], d.writes == WritesDelayed]
           <> [noSourceText | Just m <- [h.mempool], m.sources == 0]
           <> [fillingText | Just m <- [h.mempool], m.filling]
-  | otherwise = "The store is not healthy. " <> T.unwords problems
+          <> warned
+  | otherwise = "The store is not healthy. " <> T.unwords (problems <> warned)
   where
     slow = "RocksDB delays writes while it compacts the database."
+    warned = ["Warning: " <> w <> "." | w <- h.warnings]
     problems =
       [blocksText h.blocks | not (isOK h.blocks)]
         <> [lastBlockText h.lastBlock | not (isOK h.lastBlock)]

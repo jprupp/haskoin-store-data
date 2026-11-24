@@ -101,7 +101,8 @@ spec = do
               time = 1700000000,
               redis = Nothing,
               database = Nothing,
-              mempool = Nothing
+              mempool = Nothing,
+              warnings = []
             }
         database =
           DatabaseHealth
@@ -196,7 +197,8 @@ spec = do
                 time = 1623666103,
                 redis = Just True,
                 database = Just database {size = 412000000000, liveData = 405300000000, flushes = 0},
-                mempool = Just (MempoolHealth 1 False 0 0 False)
+                mempool = Just (MempoolHealth 1 False 0 0 False),
+                warnings = []
               }
       healthText example
         `shouldBe` T.unwords
@@ -258,6 +260,16 @@ spec = do
       A.fromJSON (A.toJSON filling) `shouldBe` A.Success filling
       -- a store from before the field says nothing of it: not filling
       A.fromJSON (without "filling" (A.toJSON filling)) `shouldBe` A.Success filling {filling = False}
+    it "says what the operator should put right, which is no check either" $ do
+      let warned = bare {warnings = ["The store lacks something"]} :: HealthCheck
+      isOK warned `shouldBe` True
+      healthText warned
+        `shouldBe` "The store is healthy: it has every block up to height 10, with 3 peers connected. \
+                   \Warning: The store lacks something."
+      A.fromJSON (A.toJSON warned) `shouldBe` A.Success warned
+      -- a store without warnings writes no field, and one from before it has none
+      without "warnings" (A.toJSON bare) `shouldBe` A.toJSON bare
+      A.fromJSON (without "warnings" (A.toJSON warned)) `shouldBe` A.Success bare
     it "reads what a store wrote before the database had a check" $ do
       A.fromJSON (without "database" (A.toJSON bare {database = Just database})) `shouldBe` A.Success bare
     it "is fit to serve without its Redis, and says that it is without" $ do

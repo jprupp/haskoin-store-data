@@ -190,6 +190,7 @@ instance Arbitrary HealthCheck where
       <*> arbitrary
       <*> arbitrary
       <*> arbitrary
+      <*> (map cs <$> (arbitrary :: Gen [String]))
 
 instance Arbitrary RejectCode where
   arbitrary =

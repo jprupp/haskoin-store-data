@@ -6,8 +6,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
-This breaks code that builds a `MempoolHealth` field by field or by
-position, which has one field more.
+This breaks code that builds a `MempoolHealth` or a `HealthCheck` field
+by field or by position: each has one field more.
 
 ### Changed
 
@@ -34,6 +34,11 @@ position, which has one field more.
   that waits for it before giving the store traffic. `mempoolText` and
   `healthText` say it in words. The field reads as `False` from a store
   from before it.
+- **`warnings` in `HealthCheck`**, and in the JSON of `/health` when there
+  are any: what the operator of a store should put right in how it is set
+  up, a sentence each. A warning is not a check, and a store with warnings
+  is as healthy as one without. `healthText` says them after the rest. A
+  store from before the field reads as having none.
 
 ## [4.0.0] - 2026-11-22
 
