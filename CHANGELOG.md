@@ -6,49 +6,16 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
-This breaks code that builds a `MempoolHealth` or a `HealthCheck` field
-by field or by position: each has one field more.
-
-### Changed
-
-- **A store is healthy whatever the state of its mempool.** `isOK` of a
-  `HealthCheck`, and so `ok` in the JSON of `/health`, no longer depends on
-  the two checks that look at transactions: `lastTx`, that one came lately,
-  and `pendingTxs`, that few are asked for and not received. A store that
-  has the blocks of its nodes answers every request rightly from what it
-  has, and it was taken out of service for the state of its mempool while
-  it had every block. Both checks are still made, each with its own `ok`
-  and `text`; `healthText` no longer counts either among what is wrong.
-  The health of a store is now: its database keeps up with the headers, the
-  best header is recent, enough peers are connected, and the database
-  takes writes.
-
-### Added
-
-- **`sync` in `MempoolHealth`**, and in the `mempool` object of
-  `/health`: how the shared mempool stands with the mempools of the nodes
-  of the operator, in one word (`MempoolSync`). `syncing`: the store has
-  such a node to read a whole mempool from, and has not yet read it and
-  taken in all that it named, since it started or since the shared mempool
-  lost what it had. `synced`: it has. `unknown`: it has no such node, only
-  strangers or nobody, and cannot tell. A store is healthy in all three,
-  and this says how it stands to whoever looks: an operator, or a deploy
-  that waits for `synced` before giving the store traffic. `mempoolText`
-  and `healthText` say it in words. The field reads as `unknown` from a
-  store from before it. It was first a boolean, `filling`, for a few
-  hours: a store among strangers said that it was filling for ever.
-- **`warnings` in `HealthCheck`**, and in the JSON of `/health` when there
-  are any: what the operator of a store should put right in how it is set
-  up, a sentence each. A warning is not a check, and a store with warnings
-  is as healthy as one without. `healthText` says them after the rest. A
-  store from before the field reads as having none.
-
-## [4.0.0] - 2026-11-22
+## [4.0.0] - 2026-11-25
 
 The types and requests of the tokens of Bitcoin Cash (CashTokens), for
 haskoin-store 2.0.0, on haskoin-core 3.0.
 
+This breaks code that builds a `MempoolHealth` or a `HealthCheck` field
+by field or by position: each has one field more.
+
 ### Added
+
 - **Tokens of Bitcoin Cash (CashTokens).** `scriptTokens` reads the tokens
   that the script field of an output holds, on the Bitcoin Cash networks.
   The JSON of `StoreOutput`, `StoreInput` and `Unspent` has a `token` field
@@ -87,7 +54,26 @@ haskoin-store 2.0.0, on haskoin-core 3.0.
   `isOK` of the `HealthCheck`. haskoin-store wrote the state of writes into
   its JSON before, outside the type, where a client could not read it.
 
+- **`sync` in `MempoolHealth`**, and in the `mempool` object of
+  `/health`: how the shared mempool stands with the mempools of the nodes
+  of the operator, in one word (`MempoolSync`). `syncing`: the store has
+  such a node to read a whole mempool from, and has not yet read it and
+  taken in all that it named, since it started or since the shared mempool
+  lost what it had. `synced`: it has. `unknown`: it has no such node, only
+  strangers or nobody, and cannot tell. A store is healthy in all three,
+  and this says how it stands to whoever looks: an operator, or a deploy
+  that waits for `synced` before giving the store traffic. `mempoolText`
+  and `healthText` say it in words. The field reads as `unknown` from a
+  store from before it. It was first a boolean, `filling`, for a few
+  hours: a store among strangers said that it was filling for ever.
+- **`warnings` in `HealthCheck`**, and in the JSON of `/health` when there
+  are any: what the operator of a store should put right in how it is set
+  up, a sentence each. A warning is not a check, and a store with warnings
+  is as healthy as one without. `healthText` says them after the rest. A
+  store from before the field reads as having none.
+
 ### Changed
+
 - **Breaking: `HealthCheck` has two new fields, `database`** (`Maybe
   DatabaseHealth`) **and `mempool`** (`Maybe MempoolHealth`), so code that
   builds one has to give them. In JSON they may be missing, as in the
@@ -112,6 +98,18 @@ haskoin-store 2.0.0, on haskoin-core 3.0.
   `build`, `test` and `docs`, without optimisation and with the tests in
   several processes. What it needs to know about this package, the slow
   spec module, is in the new `haskell-dev.toml`.
+
+- **A store is healthy whatever the state of its mempool.** `isOK` of a
+  `HealthCheck`, and so `ok` in the JSON of `/health`, no longer depends on
+  the two checks that look at transactions: `lastTx`, that one came lately,
+  and `pendingTxs`, that few are asked for and not received. A store that
+  has the blocks of its nodes answers every request rightly from what it
+  has, and it was taken out of service for the state of its mempool while
+  it had every block. Both checks are still made, each with its own `ok`
+  and `text`; `healthText` no longer counts either among what is wrong.
+  The health of a store is now: its database keeps up with the headers, the
+  best header is recent, enough peers are connected, and the database
+  takes writes.
 
 ## [3.0.1] - 2026-11-19
 

@@ -13,4 +13,4 @@ extra-deps:
   - base16-2.0
   - secp256k1-haskell-3.0.0
   - git: https://github.com/jprupp/haskoin-core.git
-    commit: 254b4a9636ab475eeb22c60b7a75067a4615b32f
+    commit: b2449f23bb6e15f1729d199ea091969026b54b70
