@@ -19,16 +19,12 @@ packages:
   original:
     hackage: secp256k1-haskell-3.0.0
 - completed:
-    commit: a0ba466ad21be4c8c3d3208a5fe44d4d1950e1bb
-    git: https://github.com/jprupp/haskoin-core.git
-    name: haskoin-core
+    hackage: haskoin-core-3.0.0@sha256:23985edfb8c6a32d56dd51318e9b8e9ae6ac252a83669ad2d4525f850ec1e154,8578
     pantry-tree:
-      sha256: dcf336f66dae9bc04d950d154030f4fe396f5717040c5c32c1d143cf08277ff8
-      size: 11738
-    version: 3.0.0
+      sha256: 5ed1fc327915f0eed87b85d25426c3941c421ca51d606205c7c5377893b91342
+      size: 10514
   original:
-    commit: a0ba466ad21be4c8c3d3208a5fe44d4d1950e1bb
-    git: https://github.com/jprupp/haskoin-core.git
+    hackage: haskoin-core-3.0.0
 snapshots:
 - completed:
     sha256: 2c234e9f6c9b52dbbd8e0c369dd55e275f1c143474d4a984a000588d37306e2c
