@@ -85,7 +85,7 @@ by field or by position: each has one field more.
 - **Version 4.0.0**: needs haskoin-core 3.0, which reads the token prefix
   and adds a field to `Network`. The types of this package hold those of
   haskoin-core, so a program that uses both moves to haskoin-core 3.0 with
-  it. Until 3.0 is on Hackage, `stack.yaml` pins a commit of its master.
+  it.
 - CI runs through the workflow that the Haskell packages of jprupp share in
   [jprupp/tools](https://github.com/jprupp/tools), with the check of
   `stack.yaml` for local paths (`check-stack-paths`) and the cache of the
